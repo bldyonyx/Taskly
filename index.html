@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Taskly</title>
+  </head>
+  <body>
+    <main id="app" class="taskly-page">
+      <section class="taskly-window" aria-labelledby="taskly-title">
+        <header class="window-titlebar">
+          <h1 id="taskly-title">Taskly</h1>
+          <button class="settings-button" type="button" aria-label="Settings">
+            <i data-lucide="settings" aria-hidden="true"></i>
+          </button>
+        </header>
+
+        <div class="top-grid">
+          <section class="date-card chunky-panel" aria-label="Current date">
+            <p id="date-weekday" class="date-weekday">Thursday</p>
+            <p id="date-day" class="date-day">3</p>
+            <p id="date-month" class="date-month">September</p>
+          </section>
+
+          <div class="right-column">
+            <section class="progress-card chunky-panel" aria-labelledby="progress-title">
+              <div class="progress-title-row">
+                <h2 id="progress-title">Progression</h2>
+                <output id="task-count" class="task-count" aria-live="polite">0 / 0</output>
+              </div>
+              <div
+                class="progress-track"
+                role="progressbar"
+                aria-label="Task progress"
+                aria-valuemin="0"
+                aria-valuemax="0"
+                aria-valuenow="0"
+              >
+                <span id="progress-fill" class="progress-fill"></span>
+              </div>
+            </section>
+
+            <form id="task-form" class="task-form" aria-label="Add a new task">
+              <label class="sr-only" for="new-task">Add a new task</label>
+              <input
+                id="new-task"
+                name="task"
+                type="text"
+                autocomplete="off"
+                placeholder="Write your task here..."
+              />
+              <button type="submit" aria-label="Add task">
+                <i data-lucide="plus" aria-hidden="true"></i>
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <section class="task-panel chunky-panel" aria-labelledby="tasks-title">
+          <div class="task-panel-header">
+            <h2 id="tasks-title">Tasks</h2>
+            <div class="task-header-actions" aria-label="Task list actions">
+              <button id="uncheck-all" class="task-header-action-button uncheck-all-button" type="button" aria-label="Uncheck all">
+                <i data-lucide="rotate-ccw" aria-hidden="true"></i>
+                <span class="task-header-tooltip" role="tooltip">Uncheck all</span>
+              </button>
+              <button id="delete-all" class="task-header-action-button delete-all-button" type="button" aria-label="Delete all tasks">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
+                <span class="task-header-tooltip" role="tooltip">Delete all tasks</span>
+              </button>
+            </div>
+            <p id="current-list-label" class="current-list-label">Not saved yet</p>
+          </div>
+          <ul id="task-list" class="task-list" aria-label="Tasks"></ul>
+          <p id="empty-state" class="empty-state">Write a tiny plan to begin.</p>
+        </section>
+
+        <div class="bottom-actions">
+          <div class="day-actions" aria-label="Day actions">
+            <button id="finish-day" class="finish-button" type="button">
+              <i data-lucide="sparkles" aria-hidden="true"></i>
+              <span>Finish day</span>
+            </button>
+          </div>
+          <div class="quiet-actions" aria-label="Saved list actions">
+            <button id="save-list" type="button">
+              <i data-lucide="save" aria-hidden="true"></i>
+              <span>Save list</span>
+            </button>
+            <button id="saved-lists" type="button">
+              <i data-lucide="folder-open" aria-hidden="true"></i>
+              <span>Saved lists</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

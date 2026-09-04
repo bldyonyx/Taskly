@@ -1,0 +1,28 @@
+.task-form button:active,
+.finish-button:active,
+.day-actions > button:not(.finish-button):active,
+.quiet-actions button:active,
+.remove-task:active {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0 var(--color-shadow);
+}
+
+.dialog-button:active,
+.icon-button:active {
+  transform: translate(2px, 2px);
+}
+
+.task-header-action-button:active {
+  transform: rotate(-28deg) translateY(1px) scale(0.94);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
+}
