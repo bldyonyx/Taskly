@@ -14,6 +14,7 @@ import {
 import { renderProgress } from './js/ui/progress.js'
 import { loadTasks, saveTasks } from './js/storage/storage.js'
 import {
+  createActiveTasksFromSavedList,
   createSavedList,
   loadCurrentListId,
   loadSavedLists,
@@ -21,9 +22,15 @@ import {
   saveSavedLists,
   updateSavedList,
 } from './js/lists/savedLists.js'
+import {
+  createActiveTasksFromFinishedDay,
+  createFinishedDay,
+  loadFinishedDays,
+  saveFinishedDays,
+  updateFinishedDay,
+} from './js/lists/finishedDays.js'
 import { createTaskSorter } from './js/sortable/sortable.js'
 import {
-  completeAllTasks,
   completeTask,
   createTask,
   defaultTasks,
@@ -40,9 +47,13 @@ import {
   openSavedListsDialog,
   openSaveListDialog,
   openDeleteAllTasksDialog,
+  openFinishDayDialog,
   openSettingsPanel,
   renderCurrentListLabel,
 } from './js/ui/modals.js'
+import { applySavedTheme } from './js/ui/themes.js'
+
+applySavedTheme()
 
 const elements = {
   form: document.querySelector('#task-form'),
@@ -66,6 +77,7 @@ const elements = {
 
 let tasks = loadTasks(defaultTasks)
 let savedLists = loadSavedLists()
+let finishedDays = loadFinishedDays()
 let currentListId = loadCurrentListId()
 let isFinishingDay = false
 let isDeletingAllTasks = false
@@ -106,6 +118,10 @@ function sync(animation = {}) {
 }
 
 function addTask(text) {
+  if (isFinishingDay) {
+    return
+  }
+
   const nextTask = createTask(text)
 
   if (nextTask.text.length === 0) {
@@ -128,7 +144,7 @@ function toggleTask(taskId) {
 }
 
 function removeTask(taskId) {
-  if (isDeletingAllTasks) {
+  if (isFinishingDay || isDeletingAllTasks) {
     return
   }
 
@@ -137,7 +153,7 @@ function removeTask(taskId) {
 }
 
 function reorderTasks(orderedTaskIds) {
-  if (isDeletingAllTasks) {
+  if (isFinishingDay || isDeletingAllTasks) {
     sync()
     return
   }
@@ -155,7 +171,7 @@ function reorderTasks(orderedTaskIds) {
 }
 
 function uncheckAll() {
-  if (isDeletingAllTasks) {
+  if (isFinishingDay || isDeletingAllTasks) {
     return
   }
 
@@ -191,35 +207,69 @@ function deleteAllTasksWithAnimation() {
   })
 }
 
-function finishDay() {
+function requestFinishDay() {
   if (isFinishingDay || isDeletingAllTasks) {
     return
   }
 
-  const incompleteTaskIds = tasks.filter((task) => !task.completed).map((task) => task.id)
-
-  animateFinishButton(elements.finishButton)
-
-  if (incompleteTaskIds.length === 0 || prefersReducedMotion()) {
-    tasks = completeAllTasks(tasks)
-    sync()
+  if (tasks.length === 0) {
     return
   }
 
   isFinishingDay = true
   elements.finishButton.disabled = true
 
-  incompleteTaskIds.forEach((taskId, index) => {
+  openFinishDayDialog({
+    onCancel: finishDayCleanup,
+    onConfirm: finishDay,
+  })
+}
+
+function finishDay() {
+  if (tasks.length === 0) {
+    finishDayCleanup()
+    return
+  }
+
+  finishedDays = [createFinishedDay(tasks), ...finishedDays]
+  saveFinishedDays(finishedDays)
+
+  animateFinishButton(elements.finishButton)
+
+  if (prefersReducedMotion()) {
+    resetCurrentDay()
+    sync()
+    finishDayCleanup()
+    return
+  }
+
+  const taskIds = tasks.map((task) => task.id)
+
+  taskIds.forEach((taskId, index) => {
     window.setTimeout(() => {
       tasks = completeTask(tasks, taskId, true)
       sync({ toggledTaskId: taskId, completed: true })
 
-      if (index === incompleteTaskIds.length - 1) {
-        isFinishingDay = false
-        elements.finishButton.disabled = false
+      if (index === taskIds.length - 1) {
+        window.setTimeout(() => {
+          resetCurrentDay()
+          sync()
+          finishDayCleanup()
+        }, 120)
       }
     }, index * 90)
   })
+}
+
+function resetCurrentDay() {
+  tasks = deleteAllTasks()
+  currentListId = null
+  saveCurrentListId(null)
+}
+
+function finishDayCleanup() {
+  isFinishingDay = false
+  elements.finishButton.disabled = false
 }
 
 function getTaskElement(taskId) {
@@ -264,7 +314,7 @@ function updateCurrentList(name = getCurrentList()?.name) {
   sync()
 }
 
-function updateSavedListById(listId) {
+function editSavedListById(listId, editedTasks, name) {
   const savedList = savedLists.find((list) => list.id === listId)
 
   if (!savedList) {
@@ -272,25 +322,52 @@ function updateSavedListById(listId) {
   }
 
   savedLists = savedLists.map((list) =>
-    list.id === listId ? updateSavedList(list, tasks, list.name) : list,
+    list.id === listId ? updateSavedList(list, editedTasks, name) : list,
   )
-  currentListId = listId
   persistSavedLists()
   pulseSaveButton('Updated')
   sync()
 }
 
-function loadSavedList(listId) {
+function loadSavedList(listId, mode = 'replace') {
   const savedList = savedLists.find((list) => list.id === listId)
 
   if (!savedList) {
     return
   }
 
-  tasks = savedList.tasks.map((task) => ({ ...task }))
+  const loadedTasks = createActiveTasksFromSavedList(savedList)
+  tasks = mode === 'append' ? [...tasks, ...loadedTasks] : loadedTasks
   currentListId = savedList.id
   saveCurrentListId(currentListId)
   sync()
+}
+
+function loadFinishedDay(finishedDayId, mode = 'replace') {
+  const finishedDay = finishedDays.find((day) => day.id === finishedDayId)
+
+  if (!finishedDay) {
+    return
+  }
+
+  const loadedTasks = createActiveTasksFromFinishedDay(finishedDay)
+  tasks = mode === 'append' ? [...tasks, ...loadedTasks] : loadedTasks
+  currentListId = null
+  saveCurrentListId(null)
+  sync()
+}
+
+function editFinishedDayById(finishedDayId, editedTasks) {
+  const finishedDay = finishedDays.find((day) => day.id === finishedDayId)
+
+  if (!finishedDay) {
+    return
+  }
+
+  finishedDays = finishedDays.map((day) =>
+    day.id === finishedDayId ? updateFinishedDay(day, editedTasks) : day,
+  )
+  saveFinishedDays(finishedDays)
 }
 
 function deleteSavedList(listId) {
@@ -331,7 +408,7 @@ elements.form.addEventListener('submit', (event) => {
 
 elements.uncheckButton.addEventListener('click', uncheckAll)
 elements.deleteAllButton.addEventListener('click', requestDeleteAllTasks)
-elements.finishButton.addEventListener('click', finishDay)
+elements.finishButton.addEventListener('click', requestFinishDay)
 elements.settingsButton.addEventListener('click', openSettingsPanel)
 elements.saveButton.addEventListener('click', () => {
   openSaveListDialog({
@@ -343,10 +420,18 @@ elements.saveButton.addEventListener('click', () => {
 elements.savedListsButton.addEventListener('click', () => {
   openSavedListsDialog({
     lists: savedLists,
+    finishedDays,
     currentListId,
+    hasCurrentTasks: tasks.length > 0,
     onLoad: loadSavedList,
     onDelete: deleteSavedList,
-    onUpdate: updateSavedListById,
+    onEdit: editSavedListById,
+    onDeleteFinishedDay(finishedDayId) {
+      finishedDays = finishedDays.filter((day) => day.id !== finishedDayId)
+      saveFinishedDays(finishedDays)
+    },
+    onLoadFinishedDay: loadFinishedDay,
+    onEditFinishedDay: editFinishedDayById,
   })
 })
 

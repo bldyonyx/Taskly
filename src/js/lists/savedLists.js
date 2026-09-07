@@ -36,7 +36,7 @@ export function createSavedList(name, tasks) {
   return {
     id: crypto.randomUUID(),
     name: name.trim(),
-    tasks: normalizeTasks(tasks),
+    tasks: createSavedTaskSnapshot(tasks),
     createdAt: now,
     updatedAt: now,
   }
@@ -46,9 +46,21 @@ export function updateSavedList(list, tasks, name = list.name) {
   return {
     ...list,
     name: name.trim(),
-    tasks: normalizeTasks(tasks),
+    tasks: createSavedTaskSnapshot(tasks),
     updatedAt: new Date().toISOString(),
   }
+}
+
+export function createSavedTaskSnapshot(tasks) {
+  return normalizeTasks(tasks).map((task) => ({ ...task }))
+}
+
+export function createActiveTasksFromSavedList(list) {
+  return createSavedTaskSnapshot(list?.tasks).map((task) => ({
+    ...task,
+    id: crypto.randomUUID(),
+    completed: false,
+  }))
 }
 
 export function loadCurrentListId() {
