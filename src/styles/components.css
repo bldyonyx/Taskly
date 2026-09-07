@@ -719,6 +719,14 @@ h1 {
   gap: 10px;
 }
 
+.saved-lists-description {
+  margin: 2px 2px 4px;
+  color: var(--color-muted);
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
 .saved-lists-empty {
   color: var(--color-muted);
   font-size: 1.1rem;

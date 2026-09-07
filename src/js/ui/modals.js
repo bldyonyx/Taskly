@@ -125,12 +125,21 @@ export function openSavedListsDialog({
   content.className = 'lists-tab-content'
   wrapper.append(content)
 
+  function createSavedListsDescription() {
+    const description = document.createElement('p')
+    description.className = 'saved-lists-description'
+    description.textContent = 'Save your go-to task lists as templates and load them anytime.'
+
+    return description
+  }
+
   function showSavedLists() {
     savedListsTab.classList.add('is-active')
     savedListsTab.setAttribute('aria-selected', 'true')
     finishedDaysTab.classList.remove('is-active')
     finishedDaysTab.setAttribute('aria-selected', 'false')
     content.replaceChildren()
+    content.append(createSavedListsDescription())
 
     if (lists.length === 0) {
       content.append(createEmptyMessage('No saved lists yet.'))
@@ -175,7 +184,7 @@ export function openSavedListsDialog({
         const savedRows = content.querySelectorAll('.saved-list-row')
 
         if (savedRows.length === 0) {
-          content.replaceChildren(createEmptyMessage('No saved lists yet.'))
+          content.replaceChildren(createSavedListsDescription(), createEmptyMessage('No saved lists yet.'))
         }
       })
 
