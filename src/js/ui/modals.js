@@ -133,6 +133,14 @@ export function openSavedListsDialog({
     return description
   }
 
+  function createFinishedDaysDescription() {
+    const description = document.createElement('p')
+    description.className = 'saved-lists-description'
+    description.textContent = 'Look back at previous days or load one to pick up where you left off.'
+
+    return description
+  }
+
   function showSavedLists() {
     savedListsTab.classList.add('is-active')
     savedListsTab.setAttribute('aria-selected', 'true')
@@ -363,6 +371,7 @@ export function openSavedListsDialog({
     savedListsTab.classList.remove('is-active')
     savedListsTab.setAttribute('aria-selected', 'false')
     content.replaceChildren()
+    content.append(createFinishedDaysDescription())
 
     const sortedDays = [...finishedDays].sort((first, second) => {
       return new Date(second.date).getTime() - new Date(first.date).getTime()
