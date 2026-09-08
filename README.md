@@ -26,7 +26,7 @@ organizing everyday tasks simple and pleasant. (˶ᵔ ᵕ ᵔ˶)
 
 ## ✦ Made with
 
-`React` · `JavaScript` · `Tailwind CSS` · `Vite`
+`React` · `JavaScript` · `CSS` · `Vite`
 
 ---
 
