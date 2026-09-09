@@ -38,11 +38,12 @@ import {
   removeTaskById,
   reorderTasksByIds,
   uncheckAllTasks,
+  updateTaskText,
 } from './js/tasks/taskManager.js'
 import { renderTasks } from './js/tasks/taskRenderer.js'
 import { renderDate } from './js/utils/date.js'
 import { tasksSnapshot } from './js/utils/helpers.js'
-import { getTaskStateIcon, getTrashIcon, renderStaticIcons } from './js/ui/icons.js'
+import { getEditIcon, getTaskStateIcon, getTrashIcon, renderStaticIcons } from './js/ui/icons.js'
 import {
   openSavedListsDialog,
   openSaveListDialog,
@@ -94,7 +95,9 @@ function sync(animation = {}) {
     canToggle: canToggleTask,
     onToggle: toggleTask,
     onRemove: removeTask,
+    onEdit: editTask,
   }, {
+    getEditIcon,
     getTaskStateIcon,
     getTrashIcon,
   })
@@ -150,6 +153,22 @@ function removeTask(taskId) {
 
   tasks = removeTaskById(tasks, taskId)
   sync()
+}
+
+function editTask(taskId, text) {
+  if (isFinishingDay || isDeletingAllTasks) {
+    return false
+  }
+
+  const trimmedText = text.trim()
+
+  if (trimmedText.length === 0) {
+    return false
+  }
+
+  tasks = updateTaskText(tasks, taskId, trimmedText)
+  sync()
+  return true
 }
 
 function reorderTasks(orderedTaskIds) {

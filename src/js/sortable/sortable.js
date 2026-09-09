@@ -11,7 +11,7 @@ export function createTaskSorter(listElement, { onReorder, onDragStart, onDragEn
     direction: 'vertical',
     draggable: '.task-item',
     easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
-    filter: '.remove-task',
+    filter: '.task-actions, .task-edit-input',
     forceFallback: true,
     ghostClass: 'task-drag-ghost',
     chosenClass: 'task-drag-chosen',

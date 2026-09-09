@@ -17,6 +17,16 @@ export function completeTask(tasks, taskId, completed) {
   return tasks.map((task) => (task.id === taskId ? { ...task, completed } : task))
 }
 
+export function updateTaskText(tasks, taskId, text) {
+  const nextText = text.trim()
+
+  if (nextText.length === 0) {
+    return tasks
+  }
+
+  return tasks.map((task) => (task.id === taskId ? { ...task, text: nextText } : task))
+}
+
 export function completeAllTasks(tasks) {
   return tasks.map((task) => ({ ...task, completed: true }))
 }

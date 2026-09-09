@@ -1,6 +1,7 @@
 import {
   Circle,
   CircleCheck,
+  Pencil,
   Trash2,
   createElement,
   createIcons,
@@ -38,4 +39,8 @@ export function getTaskStateIcon(completed) {
 
 export function getTrashIcon() {
   return makeIcon(Trash2, 'task-delete-icon')
+}
+
+export function getEditIcon() {
+  return makeIcon(Pencil, 'task-edit-icon')
 }
