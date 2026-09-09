@@ -10,7 +10,7 @@ h1 {
 .settings-button {
   width: 32px;
   height: 32px;
-  display: inline-grid;
+  display: grid;
   place-items: center;
   margin-left: auto;
   border: 2px solid var(--color-titlebar-soft);
@@ -38,9 +38,10 @@ h1 {
 
 .date-card {
   min-height: 220px;
-  display: grid;
-  justify-items: center;
-  align-content: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 16px;
   padding: 20px 16px;
 }
@@ -189,6 +190,11 @@ h1 {
 .task-form button svg,
 .finish-button svg {
   filter: drop-shadow(0 1px 0 var(--color-icon-shine));
+}
+
+.settings-button svg {
+  display: block;
+  margin: 0;
 }
 
 .task-form button:hover {
@@ -386,17 +392,11 @@ h1 {
   overflow-wrap: anywhere;
 }
 
-.is-done .task-text::after {
-  content: '';
-  position: absolute;
-  left: -2px;
-  top: 52%;
-  width: calc(100% + 4px);
-  height: 3px;
-  border-radius: 999px;
-  background: var(--color-danger);
-  transform: scaleX(var(--strike-scale));
-  transform-origin: left center;
+.is-done .task-text {
+  text-decoration-line: line-through;
+  text-decoration-color: var(--color-danger);
+  text-decoration-thickness: 3px;
+  text-decoration-skip-ink: none;
 }
 
 .remove-task {
@@ -1024,16 +1024,7 @@ h1 {
 @media (max-width: 760px) {
   .date-card {
     min-height: 150px;
-    grid-template-columns: 1fr auto 1fr;
     gap: 12px;
-  }
-
-  .date-weekday {
-    justify-self: end;
-  }
-
-  .date-month {
-    justify-self: start;
   }
 
   .progress-card {
@@ -1075,13 +1066,7 @@ h1 {
 
 @media (max-width: 480px) {
   .date-card {
-    grid-template-columns: 1fr;
     min-height: 178px;
-  }
-
-  .date-weekday,
-  .date-month {
-    justify-self: center;
   }
 
   .progress-title-row {
