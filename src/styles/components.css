@@ -44,6 +44,22 @@ h1 {
   justify-content: center;
   gap: 16px;
   padding: 20px 16px;
+  cursor: pointer;
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease,
+    filter 150ms ease;
+}
+
+.date-card:hover,
+.date-card:focus-visible {
+  filter: saturate(1.02);
+  transform: translateY(-2px);
+}
+
+.date-card:focus-visible {
+  outline: 3px solid var(--color-primary-soft);
+  outline-offset: 4px;
 }
 
 .date-weekday,
@@ -982,6 +998,112 @@ h1 {
 .settings-panel {
   display: grid;
   gap: 10px;
+}
+
+.calendar-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.calendar-nav {
+  display: grid;
+  grid-template-columns: 32px 1fr 32px;
+  gap: 10px;
+  align-items: center;
+}
+
+.calendar-month-title {
+  margin: 0;
+  color: var(--color-primary-dark);
+  font-family: var(--font-display);
+  font-size: 1.16rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  text-align: center;
+  font-variation-settings: 'SOFT' 92;
+}
+
+.calendar-weekdays,
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.calendar-weekdays {
+  gap: 4px;
+  color: var(--color-secondary-dark);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.calendar-grid {
+  gap: 5px;
+}
+
+.calendar-day {
+  position: relative;
+  aspect-ratio: 1;
+  min-width: 0;
+  display: grid;
+  place-items: center;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  color: var(--color-ink);
+  background: var(--color-control-surface);
+  font-size: 0.9rem;
+  font-weight: 900;
+  line-height: 1;
+  transition:
+    transform 150ms ease,
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.calendar-day:hover,
+.calendar-day:focus-visible {
+  border-color: var(--color-primary-soft);
+  background: var(--color-selected-surface);
+  transform: translateY(-1px);
+}
+
+.calendar-day.is-outside-month {
+  color: var(--color-muted);
+  opacity: 0.48;
+}
+
+.calendar-day.is-today {
+  border-color: var(--color-secondary-dark);
+}
+
+.calendar-day.is-selected {
+  color: var(--color-action-text);
+  background: var(--color-primary-dark);
+  box-shadow: inset 0 0 0 2px var(--color-paper-shine);
+}
+
+.calendar-day.is-selected::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border: 2px dashed color-mix(in srgb, var(--color-action-text) 32%, transparent);
+  border-radius: 9px;
+  pointer-events: none;
+}
+
+.calendar-day.has-tasks::after {
+  content: '';
+  position: absolute;
+  bottom: 5px;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.68;
+  transform: translateX(-50%);
 }
 
 .settings-row {

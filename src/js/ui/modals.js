@@ -1,6 +1,7 @@
 import {
   CalendarDays,
   ChevronLeft,
+  ChevronRight,
   Circle,
   CircleCheck,
   FolderOpen,
@@ -11,6 +12,7 @@ import {
   X,
 } from 'lucide'
 import { animateModalClose, animateModalOpen } from '../animations/animations.js'
+import { getAccessibleDateLabel, getDateKey, getMonthLabel } from '../utils/date.js'
 import { makeIcon } from './icons.js'
 import { applyTheme, loadThemeId, themes } from './themes.js'
 
@@ -657,7 +659,7 @@ export function openSavedListsDialog({
   modal.show()
 }
 
-export function openFinishDayDialog({ onConfirm, onCancel }) {
+export function openFinishDayDialog({ dateLabel = 'this day', onConfirm, onCancel }) {
   let didConfirm = false
   const modal = createModal('Finish this day?', {
     onClose(reason) {
@@ -671,7 +673,7 @@ export function openFinishDayDialog({ onConfirm, onCancel }) {
 
   const copy = document.createElement('p')
   copy.className = 'dialog-copy'
-  copy.textContent = "Your current tasks will be moved to Finished days and today's list will reset."
+  copy.textContent = `Your tasks for ${dateLabel} will be moved to Finished days and that list will reset.`
 
   const actions = document.createElement('div')
   actions.className = 'dialog-actions'
@@ -745,6 +747,135 @@ export function openDeleteAllTasksDialog({ onConfirm }) {
   modal.content.append(content)
   modal.show()
   cancelButton.focus()
+}
+
+export function openCalendarDialog({
+  selectedDateKey,
+  todayKey,
+  taskDateKeys = [],
+  onSelect,
+}) {
+  const selectedDate = parseDateKeyForCalendar(selectedDateKey)
+  let visibleMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)
+  const taskDateKeySet = new Set(taskDateKeys)
+  const modal = createModal('Calendar')
+  const calendar = document.createElement('div')
+  calendar.className = 'calendar-panel'
+
+  const header = document.createElement('div')
+  header.className = 'calendar-nav'
+
+  const previousButton = createIconButton(ChevronLeft, 'Previous month')
+  const nextButton = createIconButton(ChevronRight, 'Next month')
+  const monthTitle = document.createElement('h3')
+  monthTitle.className = 'calendar-month-title'
+  monthTitle.setAttribute('aria-live', 'polite')
+
+  header.append(previousButton, monthTitle, nextButton)
+
+  const weekdays = document.createElement('div')
+  weekdays.className = 'calendar-weekdays'
+  weekdays.setAttribute('aria-hidden', 'true')
+  ;['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach((weekday) => {
+    const label = document.createElement('span')
+    label.textContent = weekday
+    weekdays.append(label)
+  })
+
+  const grid = document.createElement('div')
+  grid.className = 'calendar-grid'
+
+  const todayButton = createDialogButton('Today', CalendarDays)
+  todayButton.classList.add('is-secondary')
+  todayButton.type = 'button'
+  todayButton.addEventListener('click', () => selectDate(todayKey))
+
+  previousButton.addEventListener('click', () => {
+    visibleMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1)
+    renderCalendar()
+  })
+
+  nextButton.addEventListener('click', () => {
+    visibleMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1)
+    renderCalendar()
+  })
+
+  function selectDate(dateKey) {
+    onSelect(dateKey)
+    modal.close('select')
+  }
+
+  function renderCalendar() {
+    monthTitle.textContent = getMonthLabel(visibleMonth)
+    grid.replaceChildren()
+
+    getCalendarDates(visibleMonth).forEach((date) => {
+      const dateKey = getDateKey(date)
+      const button = document.createElement('button')
+      const isCurrentMonth = date.getMonth() === visibleMonth.getMonth()
+      const isSelected = dateKey === selectedDateKey
+      const isToday = dateKey === todayKey
+      const hasTasks = taskDateKeySet.has(dateKey)
+
+      button.type = 'button'
+      button.className = [
+        'calendar-day',
+        isCurrentMonth ? '' : 'is-outside-month',
+        isSelected ? 'is-selected' : '',
+        isToday ? 'is-today' : '',
+        hasTasks ? 'has-tasks' : '',
+      ].filter(Boolean).join(' ')
+      button.setAttribute('aria-label', createCalendarDayLabel(date, { isSelected, isToday, hasTasks }))
+      button.setAttribute('aria-pressed', String(isSelected))
+      button.textContent = String(date.getDate())
+      button.addEventListener('click', () => selectDate(dateKey))
+      grid.append(button)
+    })
+  }
+
+  calendar.append(header, weekdays, grid, todayButton)
+  modal.content.append(calendar)
+  modal.show()
+  renderCalendar()
+  grid.querySelector('.calendar-day.is-selected')?.focus()
+}
+
+function getCalendarDates(monthDate) {
+  const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1)
+  const startOffset = (firstDay.getDay() + 6) % 7
+  const startDate = new Date(firstDay)
+  startDate.setDate(firstDay.getDate() - startOffset)
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(startDate)
+    date.setDate(startDate.getDate() + index)
+
+    return date
+  })
+}
+
+function createCalendarDayLabel(date, { isSelected, isToday, hasTasks }) {
+  const states = []
+
+  if (isSelected) {
+    states.push('selected')
+  }
+
+  if (isToday) {
+    states.push('today')
+  }
+
+  if (hasTasks) {
+    states.push('has tasks')
+  }
+
+  return [getAccessibleDateLabel(date), ...states].join(', ')
+}
+
+function parseDateKeyForCalendar(dateKey) {
+  const [year, month, day] = dateKey.split('-').map(Number)
+
+  return new Date(year, month - 1, day)
 }
 
 function createModal(titleText, options = {}) {
