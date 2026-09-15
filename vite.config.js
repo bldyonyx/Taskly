@@ -1,5 +1,5 @@
 import { defineConfig } from "vite";
 
-export default defineConfig({
-  base: "/Taskly/",
-});
+export default defineConfig(({ mode }) => ({
+  base: mode === "github" ? "/Taskly/" : "/",
+}));
