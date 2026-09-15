@@ -1106,6 +1106,24 @@ h1 {
   transform: translateX(-50%);
 }
 
+.calendar-day.has-finished-day::after {
+  content: '';
+  position: absolute;
+  bottom: 5px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-progress-fill);
+  box-shadow: 0 0 0 2px var(--color-control-surface);
+  transform: translateX(-50%);
+}
+
+.calendar-day.has-finished-day.is-selected::after {
+  background: var(--color-action-text);
+  box-shadow: 0 0 0 2px var(--color-primary-dark);
+}
+
 .settings-row {
   display: flex;
   align-items: center;

@@ -753,11 +753,13 @@ export function openCalendarDialog({
   selectedDateKey,
   todayKey,
   taskDateKeys = [],
+  finishedDayDateKeys = [],
   onSelect,
 }) {
   const selectedDate = parseDateKeyForCalendar(selectedDateKey)
   let visibleMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)
   const taskDateKeySet = new Set(taskDateKeys)
+  const finishedDayDateKeySet = new Set(finishedDayDateKeys)
   const modal = createModal('Calendar')
   const calendar = document.createElement('div')
   calendar.className = 'calendar-panel'
@@ -816,6 +818,7 @@ export function openCalendarDialog({
       const isSelected = dateKey === selectedDateKey
       const isToday = dateKey === todayKey
       const hasTasks = taskDateKeySet.has(dateKey)
+      const hasFinishedDay = finishedDayDateKeySet.has(dateKey)
 
       button.type = 'button'
       button.className = [
@@ -823,9 +826,10 @@ export function openCalendarDialog({
         isCurrentMonth ? '' : 'is-outside-month',
         isSelected ? 'is-selected' : '',
         isToday ? 'is-today' : '',
+        hasFinishedDay ? 'has-finished-day' : '',
         hasTasks ? 'has-tasks' : '',
       ].filter(Boolean).join(' ')
-      button.setAttribute('aria-label', createCalendarDayLabel(date, { isSelected, isToday, hasTasks }))
+      button.setAttribute('aria-label', createCalendarDayLabel(date, { isSelected, isToday, hasTasks, hasFinishedDay }))
       button.setAttribute('aria-pressed', String(isSelected))
       button.textContent = String(date.getDate())
       button.addEventListener('click', () => selectDate(dateKey))
@@ -854,7 +858,7 @@ function getCalendarDates(monthDate) {
   })
 }
 
-function createCalendarDayLabel(date, { isSelected, isToday, hasTasks }) {
+function createCalendarDayLabel(date, { isSelected, isToday, hasTasks, hasFinishedDay }) {
   const states = []
 
   if (isSelected) {
@@ -867,6 +871,10 @@ function createCalendarDayLabel(date, { isSelected, isToday, hasTasks }) {
 
   if (hasTasks) {
     states.push('has tasks')
+  }
+
+  if (hasFinishedDay) {
+    states.push('finished day')
   }
 
   return [getAccessibleDateLabel(date), ...states].join(', ')

@@ -1,4 +1,5 @@
 import { normalizeTasks } from '../storage/storage.js'
+import { getLocalDateKey } from '../utils/date.js'
 
 const FINISHED_DAYS_KEY = 'taskly.finishedDays.v1'
 
@@ -52,6 +53,20 @@ export function createFinishedDay(tasks, date = new Date()) {
 
 export function createFinishedDayTaskSnapshot(tasks) {
   return normalizeTasks(tasks).map((task) => ({ ...task }))
+}
+
+export function getFinishedDayDateKey(day) {
+  return getLocalDateKey(day?.date)
+}
+
+export function getFinishedDayDateKeys(days) {
+  return days
+    .map(getFinishedDayDateKey)
+    .filter((dateKey) => typeof dateKey === 'string')
+}
+
+export function findFinishedDayByDateKey(days, dateKey) {
+  return days.find((day) => getFinishedDayDateKey(day) === dateKey) ?? null
 }
 
 export function createActiveTasksFromFinishedDay(day) {

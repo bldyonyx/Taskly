@@ -30,6 +30,9 @@ import {
 import {
   createActiveTasksFromFinishedDay,
   createFinishedDay,
+  createFinishedDayTaskSnapshot,
+  findFinishedDayByDateKey,
+  getFinishedDayDateKeys,
   loadFinishedDays,
   saveFinishedDays,
   updateFinishedDay,
@@ -90,8 +93,9 @@ let tasksByDate = loadTasksByDate(todayKey, defaultTasks)
 let savedLists = loadSavedLists()
 let finishedDays = loadFinishedDays()
 let currentListIdsByDate = loadCurrentListIdsByDate(todayKey, loadCurrentListId())
-let tasks = tasksByDate[selectedDateKey] ?? []
-let currentListId = currentListIdsByDate[selectedDateKey] ?? null
+let selectedFinishedDayId = getFinishedDayForDateKey(selectedDateKey)?.id ?? null
+let tasks = getTasksForSelectedDate()
+let currentListId = selectedFinishedDayId ? null : currentListIdsByDate[selectedDateKey] ?? null
 let isFinishingDay = false
 let isDeletingAllTasks = false
 let isDraggingTask = false
@@ -241,6 +245,10 @@ function deleteAllTasksWithAnimation() {
 
 function requestFinishDay() {
   if (isFinishingDay || isDeletingAllTasks) {
+    return
+  }
+
+  if (selectedFinishedDayId) {
     return
   }
 
@@ -401,6 +409,11 @@ function editFinishedDayById(finishedDayId, editedTasks) {
     day.id === finishedDayId ? updateFinishedDay(day, editedTasks) : day,
   )
   saveFinishedDays(finishedDays)
+
+  if (selectedFinishedDayId === finishedDayId) {
+    tasks = createFinishedDayTaskSnapshot(editedTasks)
+    sync()
+  }
 }
 
 function deleteSavedList(listId) {
@@ -424,6 +437,14 @@ function persistSavedLists() {
 }
 
 function persistSelectedDateTasks() {
+  if (selectedFinishedDayId) {
+    finishedDays = finishedDays.map((day) =>
+      day.id === selectedFinishedDayId ? updateFinishedDay(day, tasks) : day,
+    )
+    saveFinishedDays(finishedDays)
+    return
+  }
+
   tasksByDate = {
     ...tasksByDate,
     [selectedDateKey]: tasks,
@@ -466,8 +487,9 @@ function selectDate(dateKey) {
   persistSelectedDateTasks()
   selectedDateKey = dateKey
   selectedDate = parseDateKey(selectedDateKey)
-  tasks = tasksByDate[selectedDateKey] ?? []
-  currentListId = currentListIdsByDate[selectedDateKey] ?? null
+  selectedFinishedDayId = getFinishedDayForDateKey(selectedDateKey)?.id ?? null
+  tasks = getTasksForSelectedDate()
+  currentListId = selectedFinishedDayId ? null : currentListIdsByDate[selectedDateKey] ?? null
   renderSelectedDate()
   sync()
 }
@@ -488,8 +510,29 @@ function openCalendar() {
     taskDateKeys: Object.entries(tasksByDate)
       .filter(([, dateTasks]) => Array.isArray(dateTasks) && dateTasks.length > 0)
       .map(([dateKey]) => dateKey),
+    finishedDayDateKeys: getFinishedDayDateKeys(finishedDays),
     onSelect: selectDate,
   })
+}
+
+function getFinishedDayForDateKey(dateKey) {
+  return findFinishedDayByDateKey(finishedDays, dateKey)
+}
+
+function getSelectedFinishedDay() {
+  return selectedFinishedDayId
+    ? finishedDays.find((day) => day.id === selectedFinishedDayId) ?? null
+    : null
+}
+
+function getTasksForSelectedDate() {
+  const finishedDay = getSelectedFinishedDay() ?? getFinishedDayForDateKey(selectedDateKey)
+
+  if (finishedDay) {
+    return createFinishedDayTaskSnapshot(finishedDay.tasks)
+  }
+
+  return tasksByDate[selectedDateKey] ?? []
 }
 
 function pulseSaveButton(label) {
@@ -541,6 +584,13 @@ elements.savedListsButton.addEventListener('click', () => {
     onDeleteFinishedDay(finishedDayId) {
       finishedDays = finishedDays.filter((day) => day.id !== finishedDayId)
       saveFinishedDays(finishedDays)
+
+      if (selectedFinishedDayId === finishedDayId) {
+        selectedFinishedDayId = null
+        tasks = tasksByDate[selectedDateKey] ?? []
+        currentListId = currentListIdsByDate[selectedDateKey] ?? null
+        sync()
+      }
     },
     onLoadFinishedDay: loadFinishedDay,
     onEditFinishedDay: editFinishedDayById,
