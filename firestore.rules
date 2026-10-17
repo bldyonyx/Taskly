@@ -1,0 +1,103 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    function id(value) {
+      return value is string && value.size() > 0 && value.size() <= 1500
+        && !value.matches('.*[/].*') && value != '.' && value != '..' && !value.matches('__.*__');
+    }
+    function dateKey(value) {
+      // Calendar shape/range check; the client additionally checks month lengths.
+      return value is string && value.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])');
+    }
+    function text(value, max) { return value is string && value.size() > 0 && value.size() <= max; }
+    function nonnegative(value) { return value is int && value >= 0 && value <= 9007199254740991; }
+    function base(d, uid, fields) {
+      let keys = fields.concat(['schemaVersion', 'ownerId']);
+      return d.keys().hasAll(keys) && d.keys().hasOnly(keys) && d.schemaVersion == 1
+        && d.schemaVersion is int && d.ownerId == uid;
+    }
+    function task(d, uid, taskId) {
+      return base(d, uid, ['id', 'text', 'completed', 'order']) && d.id == taskId
+        && id(taskId) && text(d.text, 10000) && d.completed is bool && nonnegative(d.order);
+    }
+    match /users/{uid} {
+      allow read: if owner(uid);
+      allow create: if owner(uid) && base(request.resource.data, uid, []);
+      allow update: if owner(uid) && resource.data.ownerId == uid && base(request.resource.data, uid, []);
+      allow delete: if owner(uid);
+
+      match /days/{dayId} {
+        function valid(d) {
+          return base(d, uid, ['dateKey', 'currentListId']) && dateKey(dayId) && d.dateKey == dayId
+            && (d.currentListId == null || id(d.currentListId));
+        }
+        allow read, delete: if owner(uid);
+        allow create: if owner(uid) && valid(request.resource.data);
+        allow update: if owner(uid) && resource.data.ownerId == uid && valid(request.resource.data);
+        match /tasks/{taskId} {
+          allow read, delete: if owner(uid);
+          allow create: if owner(uid) && dateKey(dayId) && task(request.resource.data, uid, taskId);
+          allow update: if owner(uid) && resource.data.ownerId == uid && dateKey(dayId) && task(request.resource.data, uid, taskId);
+        }
+      }
+      match /savedLists/{listId} {
+        function valid(d) {
+          return base(d, uid, ['id', 'name', 'createdAt', 'updatedAt', 'order']) && d.id == listId && id(listId)
+            && text(d.name, 200) && text(d.createdAt, 64) && text(d.updatedAt, 64) && nonnegative(d.order);
+        }
+        allow read, delete: if owner(uid);
+        allow create: if owner(uid) && valid(request.resource.data);
+        allow update: if owner(uid) && resource.data.ownerId == uid && valid(request.resource.data)
+          && request.resource.data.createdAt == resource.data.createdAt;
+        match /tasks/{taskId} {
+          allow read, delete: if owner(uid);
+          allow create: if owner(uid) && id(listId) && task(request.resource.data, uid, taskId);
+          allow update: if owner(uid) && resource.data.ownerId == uid && id(listId) && task(request.resource.data, uid, taskId);
+        }
+      }
+      match /finishedDays/{finishedId} {
+        function valid(d) {
+          return base(d, uid, ['id', 'dateKey', 'date', 'createdAt', 'completedCount', 'totalCount', 'order'])
+            && d.id == finishedId && id(finishedId) && dateKey(d.dateKey) && text(d.date, 64) && text(d.createdAt, 64)
+            && nonnegative(d.completedCount) && nonnegative(d.totalCount) && d.completedCount <= d.totalCount && nonnegative(d.order);
+        }
+        allow read, delete: if owner(uid);
+        allow create: if owner(uid) && valid(request.resource.data);
+        allow update: if owner(uid) && resource.data.ownerId == uid && valid(request.resource.data)
+          && request.resource.data.dateKey == resource.data.dateKey
+          && request.resource.data.date == resource.data.date && request.resource.data.createdAt == resource.data.createdAt;
+        match /tasks/{taskId} {
+          allow read, delete: if owner(uid);
+          allow create: if owner(uid) && id(finishedId) && task(request.resource.data, uid, taskId);
+          allow update: if owner(uid) && resource.data.ownerId == uid && id(finishedId) && task(request.resource.data, uid, taskId);
+        }
+      }
+      match /preferences/{preferenceId} {
+        function valid(d) {
+          return preferenceId == 'general' && base(d, uid, ['themeId'])
+            && d.themeId in ['plum', 'forest', 'ocean', 'rose', 'midnight'];
+        }
+        allow read: if owner(uid);
+        allow delete: if owner(uid) && preferenceId == 'general';
+        allow create: if owner(uid) && valid(request.resource.data);
+        allow update: if owner(uid) && resource.data.ownerId == uid && valid(request.resource.data);
+      }
+      match /imports/{importId} {
+        function valid(d) {
+          return base(d, uid, ['id', 'sourceId', 'backupHash', 'status', 'createdAt', 'completedAt'])
+            && d.id == importId && id(importId) && id(d.sourceId) && d.backupHash is string
+            && d.backupHash.matches('[a-f0-9]{64}') && text(d.createdAt, 64)
+            && ((d.status == 'pending' && d.completedAt == null) || (d.status == 'complete' && text(d.completedAt, 64)));
+        }
+        allow read, delete: if owner(uid);
+        allow create: if owner(uid) && valid(request.resource.data);
+        allow update: if owner(uid) && resource.data.ownerId == uid && valid(request.resource.data)
+          && request.resource.data.sourceId == resource.data.sourceId && request.resource.data.backupHash == resource.data.backupHash
+          && request.resource.data.createdAt == resource.data.createdAt
+          && (resource.data.status != 'complete' || request.resource.data.status == 'complete');
+      }
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

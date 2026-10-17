@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
+    "test:rules": "node --test tests/emulator/firestore.rules.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"

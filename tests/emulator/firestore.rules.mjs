@@ -1,0 +1,104 @@
+// Explicit emulator-only suite; not part of the default node --test discovery.
+import test, { before, after } from 'node:test'
+import assert from 'node:assert/strict'
+import { initializeApp, deleteApp } from 'firebase/app'
+import { initializeFirestore, connectFirestoreEmulator, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, terminate } from 'firebase/firestore'
+import { documents } from '../helpers/firestore-fixtures.js'
+
+const projectId = 'demo-taskly-rules'
+const host = process.env.FIRESTORE_EMULATOR_HOST
+assert.match(host ?? '', /^(localhost|127\.0\.0\.1):\d+$/, 'Start the local Firestore emulator first; production endpoints are forbidden.')
+assert.ok(!process.env.GCLOUD_PROJECT || process.env.GCLOUD_PROJECT === projectId, 'Use only the demo-taskly-rules project for this suite.')
+const [hostname, port] = host.split(':')
+const clients = new Map()
+for (const uid of ['alice', 'bob', 'guest']) {
+  const app = initializeApp({ projectId, apiKey: 'emulator-only', appId: `test-${uid}` }, `rules-${uid}`)
+  const db = initializeFirestore(app, {})
+  connectFirestoreEmulator(db, hostname, Number(port), uid === 'guest' ? {} : { mockUserToken: { sub: uid, user_id: uid } })
+  clients.set(uid, { app, db })
+}
+const db = clients.get('alice').db
+const ref = (client, path, uid = 'alice') => doc(clients.get(client).db, `users/${uid}${path ? `/${path}` : ''}`)
+const denied = (operation) => assert.rejects(operation, (error) => error.code === 'permission-denied')
+const fixtures = documents()
+
+before(async () => {
+  const response = await fetch(`http://${host}/emulator/v1/projects/${projectId}/databases/(default)/documents`, { method: 'DELETE', signal: AbortSignal.timeout(5000) })
+  assert.equal(response.ok, true)
+  // Rules must already be loaded by firebase emulators:exec/start using firebase.json.
+  for (const { path, data } of fixtures) await setDoc(ref('alice', path), data)
+})
+after(async () => {
+  await Promise.all([...clients.values()].map(async ({ app, db }) => { await terminate(db); await deleteApp(app) }))
+})
+
+test('owners can read and update every planned document, including all nested task collections', async () => {
+  for (const { path, data } of fixtures) {
+    assert.deepEqual((await getDoc(ref('alice', path))).data(), data)
+    await setDoc(ref('alice', path), data)
+  }
+  for (const path of ['days', 'savedLists', 'finishedDays', 'preferences', 'imports', 'days/2026-10-18/tasks', 'savedLists/list-b/tasks', 'finishedDays/finished-b/tasks']) {
+    assert.equal((await getDocs(collection(db, `users/alice/${path}`))).empty, false)
+    await denied(getDocs(collection(clients.get('bob').db, `users/alice/${path}`)))
+  }
+})
+
+test('guests and another account cannot read, write or delete any planned document', async () => {
+  for (const client of ['guest', 'bob']) for (const { path, data } of fixtures) {
+    await denied(getDoc(ref(client, path)))
+    await denied(setDoc(ref(client, path), data))
+    await denied(deleteDoc(ref(client, path)))
+  }
+})
+
+test('ownership, version, field sets and document IDs cannot be forged or changed', async () => {
+  for (const { path, data } of fixtures) {
+    for (const patch of [{ ownerId: 'bob' }, { schemaVersion: 2 }, { extraField: true }]) {
+      await denied(setDoc(ref('alice', path), { ...data, ...patch }))
+    }
+    const missing = { ...data }
+    delete missing.ownerId
+    await denied(setDoc(ref('alice', path), missing))
+    if (Object.hasOwn(data, 'id')) await denied(updateDoc(ref('alice', path), { id: 'forged' }))
+  }
+  await denied(setDoc(ref('bob', 'days/2026-10-18', 'bob'), fixtures.find((d) => d.path === 'days/2026-10-18').data))
+})
+
+test('invalid tasks, days, preferences and finished-day calendar changes are rejected', async () => {
+  for (const parent of ['days/2026-10-18', 'savedLists/list-b', 'finishedDays/finished-b']) {
+    for (const patch of [{ completed: 'yes' }, { order: -1 }, { order: 0.5 }, { text: '' }, { text: 'x'.repeat(10001) }]) {
+      await denied(updateDoc(ref('alice', `${parent}/tasks/task-b`), patch))
+    }
+  }
+  await denied(updateDoc(ref('alice', 'days/2026-10-18'), { dateKey: '2026-10-19' }))
+  await denied(updateDoc(ref('alice', 'days/2026-10-18'), { currentListId: 7 }))
+  await denied(updateDoc(ref('alice', 'finishedDays/finished-b'), { dateKey: '2026-10-19' }))
+  await denied(updateDoc(ref('alice', 'savedLists/list-b'), { createdAt: 'changed' }))
+  await denied(updateDoc(ref('alice', 'finishedDays/finished-b'), { date: '2026-10-19' }))
+  await denied(updateDoc(ref('alice', 'finishedDays/finished-b'), { totalCount: 0 }))
+  await denied(updateDoc(ref('alice', 'preferences/general'), { themeId: 'unknown' }))
+  await denied(setDoc(ref('alice', 'preferences/other'), { schemaVersion: 1, ownerId: 'alice', themeId: 'forest' }))
+})
+
+test('import tracking validates state and cannot be reverted from complete to pending', async () => {
+  await denied(updateDoc(ref('alice', 'imports/import-1'), { backupHash: 'not-a-hash' }))
+  await denied(updateDoc(ref('alice', 'imports/import-1'), { sourceId: 'different' }))
+  await denied(updateDoc(ref('alice', 'imports/import-1'), { status: 'complete', completedAt: null }))
+  await updateDoc(ref('alice', 'imports/import-1'), { status: 'complete', completedAt: '2026-10-18T12:01:00Z' })
+  await denied(updateDoc(ref('alice', 'imports/import-1'), { status: 'pending', completedAt: null }))
+})
+
+test('unknown collections and unplanned nesting remain denied', async () => {
+  for (const path of ['unknown/document', 'days/2026-10-18/tasks/task-b/notes/note', 'savedLists/list-b/unknown/document']) {
+    await denied(setDoc(ref('alice', path), { ownerId: 'alice', schemaVersion: 1 }))
+    await denied(getDoc(ref('alice', path)))
+  }
+  await denied(setDoc(doc(db, 'outside/document'), { ownerId: 'alice' }))
+})
+
+test('owners can delete their own documents; deletes do not grant cross-user rights', async () => {
+  const path = 'days/2026-10-20'
+  await setDoc(ref('alice', path), { ownerId: 'alice', schemaVersion: 1, dateKey: '2026-10-20', currentListId: null })
+  await deleteDoc(ref('alice', path))
+  assert.equal((await getDoc(ref('alice', path))).exists(), false)
+})
