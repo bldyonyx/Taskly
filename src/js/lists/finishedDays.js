@@ -3,9 +3,9 @@ import { getLocalDateKey } from '../utils/date.js'
 
 const FINISHED_DAYS_KEY = 'taskly.finishedDays.v1'
 
-export function loadFinishedDays() {
+export function loadFinishedDays(storage = localStorage) {
   try {
-    const days = JSON.parse(localStorage.getItem(FINISHED_DAYS_KEY))
+    const days = JSON.parse(storage.getItem(FINISHED_DAYS_KEY))
 
     if (!Array.isArray(days)) {
       return []
@@ -32,8 +32,8 @@ export function loadFinishedDays() {
   }
 }
 
-export function saveFinishedDays(days) {
-  localStorage.setItem(FINISHED_DAYS_KEY, JSON.stringify(days))
+export function saveFinishedDays(days, storage = localStorage) {
+  storage.setItem(FINISHED_DAYS_KEY, JSON.stringify(days))
 }
 
 export function createFinishedDay(tasks, date = new Date()) {

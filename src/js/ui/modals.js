@@ -14,7 +14,7 @@ import {
 import { animateModalClose, animateModalOpen } from '../animations/animations.js'
 import { getAccessibleDateLabel, getDateKey, getMonthLabel } from '../utils/date.js'
 import { makeIcon } from './icons.js'
-import { applyTheme, loadThemeId, themes } from './themes.js'
+import { selectTheme, loadThemeId, themes } from './themes.js'
 import { createBackupSection } from './backupControls.js'
 
 export function renderCurrentListLabel(element, currentList, hasUnsavedChanges) {
@@ -1014,7 +1014,7 @@ function createThemeSection() {
 
     button.append(swatches, name)
     button.addEventListener('click', () => {
-      applyTheme(theme.id)
+      selectTheme(theme.id)
       updateThemeSelection(grid, theme.id)
     })
 

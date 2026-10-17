@@ -12,19 +12,10 @@ import {
   prefersReducedMotion,
 } from './js/animations/animations.js'
 import { renderProgress } from './js/ui/progress.js'
-import {
-  loadCurrentListIdsByDate,
-  loadTasksByDate,
-  saveCurrentListIdsByDate,
-  saveTasksByDate,
-} from './js/storage/storage.js'
+import { localRepository as repository } from './js/storage/repository.js'
 import {
   createActiveTasksFromSavedList,
   createSavedList,
-  loadCurrentListId,
-  loadSavedLists,
-  saveCurrentListId,
-  saveSavedLists,
   updateSavedList,
 } from './js/lists/savedLists.js'
 import {
@@ -33,8 +24,6 @@ import {
   createFinishedDayTaskSnapshot,
   findFinishedDayByDateKey,
   getFinishedDayDateKeys,
-  loadFinishedDays,
-  saveFinishedDays,
   updateFinishedDay,
 } from './js/lists/finishedDays.js'
 import { createTaskSorter } from './js/sortable/sortable.js'
@@ -91,10 +80,7 @@ const elements = {
 const todayKey = getDateKey()
 let selectedDateKey = todayKey
 let selectedDate = parseDateKey(selectedDateKey)
-let tasksByDate = loadTasksByDate(todayKey, defaultTasks)
-let savedLists = loadSavedLists()
-let finishedDays = loadFinishedDays()
-let currentListIdsByDate = loadCurrentListIdsByDate(todayKey, loadCurrentListId())
+let { tasksByDate, savedLists, finishedDays, currentListIdsByDate } = repository.loadState(todayKey, defaultTasks)
 let selectedFinishedDayId = getFinishedDayForDateKey(selectedDateKey)?.id ?? null
 let tasks = getTasksForSelectedDate()
 let currentListId = selectedFinishedDayId ? null : currentListIdsByDate[selectedDateKey] ?? null
@@ -103,13 +89,7 @@ let isDeletingAllTasks = false
 let isDraggingTask = false
 let didDragTask = false
 
-if (!savedLists.some((list) => list.id === currentListId)) {
-  currentListId = null
-  saveCurrentListForSelectedDate(null)
-}
-pruneCurrentListIdsByDate()
-
-function sync(animation = {}) {
+function render(animation = {}) {
   renderTasks(tasks, elements, {
     canToggle: canToggleTask,
     onToggle: toggleTask,
@@ -122,7 +102,6 @@ function sync(animation = {}) {
   })
   renderProgress(tasks, elements)
   renderCurrentListLabel(elements.currentListLabel, getCurrentList(), hasUnsavedChanges())
-  persistSelectedDateTasks()
 
   if (animation.addedTaskId) {
     animateTaskEnter(getTaskElement(animation.addedTaskId))
@@ -151,7 +130,8 @@ function addTask(text) {
   }
 
   tasks = [nextTask, ...tasks]
-  sync({ addedTaskId: nextTask.id })
+  persistSelectedDateTasks()
+  render({ addedTaskId: nextTask.id })
 }
 
 function toggleTask(taskId) {
@@ -162,7 +142,8 @@ function toggleTask(taskId) {
   const nextCompleted = !tasks.find((task) => task.id === taskId)?.completed
 
   tasks = completeTask(tasks, taskId, nextCompleted)
-  sync({ toggledTaskId: taskId, completed: nextCompleted })
+  persistSelectedDateTasks()
+  render({ toggledTaskId: taskId, completed: nextCompleted })
 }
 
 function removeTask(taskId) {
@@ -171,7 +152,8 @@ function removeTask(taskId) {
   }
 
   tasks = removeTaskById(tasks, taskId)
-  sync()
+  persistSelectedDateTasks()
+  render()
 }
 
 function editTask(taskId, text) {
@@ -186,20 +168,21 @@ function editTask(taskId, text) {
   }
 
   tasks = updateTaskText(tasks, taskId, trimmedText)
-  sync()
+  persistSelectedDateTasks()
+  render()
   return true
 }
 
 function reorderTasks(orderedTaskIds) {
   if (isFinishingDay || isDeletingAllTasks) {
-    sync()
+    render()
     return
   }
 
   const reorderedTasks = reorderTasksByIds(tasks, orderedTaskIds)
 
   if (reorderedTasks === tasks) {
-    sync()
+    render()
     return
   }
 
@@ -214,7 +197,8 @@ function uncheckAll() {
   }
 
   tasks = uncheckAllTasks(tasks)
-  sync()
+  persistSelectedDateTasks()
+  render()
 }
 
 function requestDeleteAllTasks() {
@@ -238,10 +222,11 @@ function deleteAllTasksWithAnimation() {
 
   animateAllTasksDelete(elements.list.querySelectorAll('.task-item'), () => {
     tasks = deleteAllTasks()
+    persistSelectedDateTasks()
     isDeletingAllTasks = false
     elements.uncheckButton.disabled = false
     elements.deleteAllButton.disabled = false
-    sync()
+    render()
   })
 }
 
@@ -275,13 +260,20 @@ function finishDay() {
   }
 
   finishedDays = [createFinishedDay(tasks, selectedDate), ...finishedDays]
-  saveFinishedDays(finishedDays)
+  repository.saveFinishedDays(finishedDays)
+  // Persist the final result once. The completion animation below is visual
+  // state only and must not save its temporary all-completed task snapshots.
+  tasksByDate = { ...tasksByDate, [selectedDateKey]: [] }
+  currentListIdsByDate = { ...currentListIdsByDate }
+  delete currentListIdsByDate[selectedDateKey]
+  repository.saveTasksByDate(tasksByDate)
+  repository.saveCurrentListIdsByDate(todayKey, currentListIdsByDate)
 
   animateFinishButton(elements.finishButton)
 
   if (prefersReducedMotion()) {
     resetCurrentDay()
-    sync()
+    render()
     finishDayCleanup()
     return
   }
@@ -291,12 +283,12 @@ function finishDay() {
   taskIds.forEach((taskId, index) => {
     window.setTimeout(() => {
       tasks = completeTask(tasks, taskId, true)
-      sync({ toggledTaskId: taskId, completed: true })
+      render({ toggledTaskId: taskId, completed: true })
 
       if (index === taskIds.length - 1) {
         window.setTimeout(() => {
           resetCurrentDay()
-          sync()
+          render()
           finishDayCleanup()
         }, 120)
       }
@@ -307,7 +299,6 @@ function finishDay() {
 function resetCurrentDay() {
   tasks = deleteAllTasks()
   currentListId = null
-  saveCurrentListForSelectedDate(null)
 }
 
 function finishDayCleanup() {
@@ -338,8 +329,9 @@ function saveNewList(name) {
   savedLists = [savedList, ...savedLists]
   currentListId = savedList.id
   persistSavedLists()
+  persistSelectedDateTasks()
   pulseSaveButton('Saved')
-  sync()
+  render()
 }
 
 function updateCurrentList(name = getCurrentList()?.name) {
@@ -353,8 +345,9 @@ function updateCurrentList(name = getCurrentList()?.name) {
     list.id === currentList.id ? updateSavedList(list, tasks, name) : list,
   )
   persistSavedLists()
+  persistSelectedDateTasks()
   pulseSaveButton('Updated')
-  sync()
+  render()
 }
 
 function editSavedListById(listId, editedTasks, name) {
@@ -369,7 +362,7 @@ function editSavedListById(listId, editedTasks, name) {
   )
   persistSavedLists()
   pulseSaveButton('Updated')
-  sync()
+  render()
 }
 
 function loadSavedList(listId, mode = 'replace') {
@@ -383,7 +376,8 @@ function loadSavedList(listId, mode = 'replace') {
   tasks = mode === 'append' ? [...tasks, ...loadedTasks] : loadedTasks
   currentListId = savedList.id
   saveCurrentListForSelectedDate(currentListId)
-  sync()
+  persistSelectedDateTasks()
+  render()
 }
 
 function loadFinishedDay(finishedDayId, mode = 'replace') {
@@ -397,7 +391,8 @@ function loadFinishedDay(finishedDayId, mode = 'replace') {
   tasks = mode === 'append' ? [...tasks, ...loadedTasks] : loadedTasks
   currentListId = null
   saveCurrentListForSelectedDate(null)
-  sync()
+  persistSelectedDateTasks()
+  render()
 }
 
 function editFinishedDayById(finishedDayId, editedTasks) {
@@ -410,11 +405,11 @@ function editFinishedDayById(finishedDayId, editedTasks) {
   finishedDays = finishedDays.map((day) =>
     day.id === finishedDayId ? updateFinishedDay(day, editedTasks) : day,
   )
-  saveFinishedDays(finishedDays)
+  repository.saveFinishedDays(finishedDays)
 
   if (selectedFinishedDayId === finishedDayId) {
     tasks = createFinishedDayTaskSnapshot(editedTasks)
-    sync()
+    render()
   }
 }
 
@@ -430,11 +425,11 @@ function deleteSavedList(listId) {
   }
 
   persistSavedLists()
-  sync()
+  render()
 }
 
 function persistSavedLists() {
-  saveSavedLists(savedLists)
+  repository.saveSavedLists(savedLists)
   saveCurrentListForSelectedDate(currentListId)
 }
 
@@ -443,7 +438,7 @@ function persistSelectedDateTasks() {
     finishedDays = finishedDays.map((day) =>
       day.id === selectedFinishedDayId ? updateFinishedDay(day, tasks) : day,
     )
-    saveFinishedDays(finishedDays)
+    repository.saveFinishedDays(finishedDays)
     return
   }
 
@@ -451,7 +446,10 @@ function persistSelectedDateTasks() {
     ...tasksByDate,
     [selectedDateKey]: tasks,
   }
-  saveTasksByDate(tasksByDate)
+  repository.saveTasksByDate(tasksByDate)
+  // Pin legacy list references to their original date when a user first edits
+  // tasks. Startup and navigation keep this fallback strictly in memory.
+  repository.saveCurrentListIdsByDate(todayKey, currentListIdsByDate)
 }
 
 function saveCurrentListForSelectedDate(listId) {
@@ -467,18 +465,7 @@ function saveCurrentListForSelectedDate(listId) {
     delete currentListIdsByDate[selectedDateKey]
   }
 
-  saveCurrentListIdsByDate(currentListIdsByDate)
-  saveCurrentListId(currentListIdsByDate[todayKey] ?? null)
-}
-
-function pruneCurrentListIdsByDate() {
-  const savedListIds = new Set(savedLists.map((list) => list.id))
-  currentListIdsByDate = Object.fromEntries(
-    Object.entries(currentListIdsByDate).filter(([, listId]) => savedListIds.has(listId)),
-  )
-  currentListId = currentListIdsByDate[selectedDateKey] ?? null
-  saveCurrentListIdsByDate(currentListIdsByDate)
-  saveCurrentListId(currentListIdsByDate[todayKey] ?? null)
+  repository.saveCurrentListIdsByDate(todayKey, currentListIdsByDate)
 }
 
 function selectDate(dateKey) {
@@ -486,14 +473,13 @@ function selectDate(dateKey) {
     return
   }
 
-  persistSelectedDateTasks()
   selectedDateKey = dateKey
   selectedDate = parseDateKey(selectedDateKey)
   selectedFinishedDayId = getFinishedDayForDateKey(selectedDateKey)?.id ?? null
   tasks = getTasksForSelectedDate()
   currentListId = selectedFinishedDayId ? null : currentListIdsByDate[selectedDateKey] ?? null
   renderSelectedDate()
-  sync()
+  render()
 }
 
 function renderSelectedDate() {
@@ -587,13 +573,13 @@ elements.savedListsButton.addEventListener('click', () => {
     onEdit: editSavedListById,
     onDeleteFinishedDay(finishedDayId) {
       finishedDays = finishedDays.filter((day) => day.id !== finishedDayId)
-      saveFinishedDays(finishedDays)
+      repository.saveFinishedDays(finishedDays)
 
       if (selectedFinishedDayId === finishedDayId) {
         selectedFinishedDayId = null
         tasks = tasksByDate[selectedDateKey] ?? []
         currentListId = currentListIdsByDate[selectedDateKey] ?? null
-        sync()
+        render()
       }
     },
     onLoadFinishedDay: loadFinishedDay,
@@ -603,7 +589,7 @@ elements.savedListsButton.addEventListener('click', () => {
 
 renderStaticIcons()
 renderSelectedDate()
-sync()
+render()
 
 createTaskSorter(elements.list, {
   onDragStart() {

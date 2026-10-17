@@ -17,9 +17,9 @@ export function normalizeTasks(tasks = []) {
     .filter((task) => task.text.length > 0)
 }
 
-export function loadTasks(fallbackTasks = []) {
+export function loadTasks(fallbackTasks = [], storage = localStorage) {
   try {
-    const storedTasks = JSON.parse(localStorage.getItem(STORAGE_KEY))
+    const storedTasks = JSON.parse(storage.getItem(STORAGE_KEY))
 
     if (!Array.isArray(storedTasks)) {
       return fallbackTasks
@@ -31,19 +31,19 @@ export function loadTasks(fallbackTasks = []) {
   }
 }
 
-export function saveTasks(tasks) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks))
+export function saveTasks(tasks, storage = localStorage) {
+  storage.setItem(STORAGE_KEY, JSON.stringify(tasks))
 }
 
-export function loadTasksByDate(todayKey, fallbackTasks = []) {
+export function loadTasksByDate(todayKey, fallbackTasks = [], storage = localStorage) {
   try {
-    const storedTasksByDate = JSON.parse(localStorage.getItem(TASKS_BY_DATE_KEY))
+    const storedTasksByDate = JSON.parse(storage.getItem(TASKS_BY_DATE_KEY))
 
     if (storedTasksByDate && typeof storedTasksByDate === 'object' && !Array.isArray(storedTasksByDate)) {
       return normalizeTasksByDate(storedTasksByDate)
     }
 
-    const migratedTasks = loadTasks(fallbackTasks)
+    const migratedTasks = loadTasks(fallbackTasks, storage)
 
     return {
       [todayKey]: migratedTasks,
@@ -55,13 +55,13 @@ export function loadTasksByDate(todayKey, fallbackTasks = []) {
   }
 }
 
-export function saveTasksByDate(tasksByDate) {
-  localStorage.setItem(TASKS_BY_DATE_KEY, JSON.stringify(normalizeTasksByDate(tasksByDate)))
+export function saveTasksByDate(tasksByDate, storage = localStorage) {
+  storage.setItem(TASKS_BY_DATE_KEY, JSON.stringify(normalizeTasksByDate(tasksByDate)))
 }
 
-export function loadCurrentListIdsByDate(todayKey, fallbackListId = null) {
+export function loadCurrentListIdsByDate(todayKey, fallbackListId = null, storage = localStorage) {
   try {
-    const storedListIdsByDate = JSON.parse(localStorage.getItem(CURRENT_LIST_BY_DATE_KEY))
+    const storedListIdsByDate = JSON.parse(storage.getItem(CURRENT_LIST_BY_DATE_KEY))
 
     if (storedListIdsByDate && typeof storedListIdsByDate === 'object' && !Array.isArray(storedListIdsByDate)) {
       return Object.fromEntries(
@@ -75,8 +75,8 @@ export function loadCurrentListIdsByDate(todayKey, fallbackListId = null) {
   return fallbackListId ? { [todayKey]: fallbackListId } : {}
 }
 
-export function saveCurrentListIdsByDate(currentListIdsByDate) {
-  localStorage.setItem(CURRENT_LIST_BY_DATE_KEY, JSON.stringify(currentListIdsByDate))
+export function saveCurrentListIdsByDate(currentListIdsByDate, storage = localStorage) {
+  storage.setItem(CURRENT_LIST_BY_DATE_KEY, JSON.stringify(currentListIdsByDate))
 }
 
 function normalizeTasksByDate(tasksByDate) {

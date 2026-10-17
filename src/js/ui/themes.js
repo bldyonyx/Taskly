@@ -1,4 +1,4 @@
-const THEME_STORAGE_KEY = 'taskly.theme.v1'
+import { localRepository } from '../storage/repository.js'
 const DEFAULT_THEME_ID = 'plum'
 
 export const themes = [
@@ -37,9 +37,12 @@ export function applyTheme(themeId) {
   const nextThemeId = isKnownTheme(themeId) ? themeId : DEFAULT_THEME_ID
 
   document.documentElement.dataset.theme = nextThemeId
+}
 
+export function selectTheme(themeId) {
+  applyTheme(themeId)
   try {
-    localStorage.setItem(THEME_STORAGE_KEY, nextThemeId)
+    localRepository.saveTheme(document.documentElement.dataset.theme)
   } catch {
     return
   }
@@ -47,7 +50,7 @@ export function applyTheme(themeId) {
 
 export function loadThemeId() {
   try {
-    const storedThemeId = localStorage.getItem(THEME_STORAGE_KEY)
+    const storedThemeId = localRepository.loadTheme()
 
     return isKnownTheme(storedThemeId) ? storedThemeId : DEFAULT_THEME_ID
   } catch {

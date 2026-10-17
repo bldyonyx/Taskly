@@ -3,9 +3,9 @@ import { normalizeTasks } from '../storage/storage.js'
 const SAVED_LISTS_KEY = 'taskly.savedLists.v1'
 const CURRENT_LIST_KEY = 'taskly.currentListId.v1'
 
-export function loadSavedLists() {
+export function loadSavedLists(storage = localStorage) {
   try {
-    const lists = JSON.parse(localStorage.getItem(SAVED_LISTS_KEY))
+    const lists = JSON.parse(storage.getItem(SAVED_LISTS_KEY))
 
     if (!Array.isArray(lists)) {
       return []
@@ -26,8 +26,8 @@ export function loadSavedLists() {
   }
 }
 
-export function saveSavedLists(lists) {
-  localStorage.setItem(SAVED_LISTS_KEY, JSON.stringify(lists))
+export function saveSavedLists(lists, storage = localStorage) {
+  storage.setItem(SAVED_LISTS_KEY, JSON.stringify(lists))
 }
 
 export function createSavedList(name, tasks) {
@@ -63,17 +63,17 @@ export function createActiveTasksFromSavedList(list) {
   }))
 }
 
-export function loadCurrentListId() {
-  const currentListId = localStorage.getItem(CURRENT_LIST_KEY)
+export function loadCurrentListId(storage = localStorage) {
+  const currentListId = storage.getItem(CURRENT_LIST_KEY)
 
   return typeof currentListId === 'string' && currentListId.length > 0 ? currentListId : null
 }
 
-export function saveCurrentListId(listId) {
+export function saveCurrentListId(listId, storage = localStorage) {
   if (listId) {
-    localStorage.setItem(CURRENT_LIST_KEY, listId)
+    storage.setItem(CURRENT_LIST_KEY, listId)
     return
   }
 
-  localStorage.removeItem(CURRENT_LIST_KEY)
+  storage.removeItem(CURRENT_LIST_KEY)
 }
