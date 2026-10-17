@@ -719,11 +719,7 @@ export function openSettingsPanel({ session } = {}) {
   const panel = document.createElement('div')
   panel.className = 'settings-panel'
 
-  const motionRow = createSettingsRow('Motion', 'System')
-  const storageRow = createSettingsRow('Storage', 'This browser')
-  const themeSection = createThemeSection()
-
-  panel.append(motionRow, storageRow, account.section, themeSection, createBackupSection())
+  panel.append(account.section, createAppearanceSection(), createBackupSection())
   modal.content.append(panel)
   modal.show()
   panel.closest('.taskly-dialog').querySelector('button')?.focus()
@@ -998,14 +994,33 @@ function createSettingsRow(labelText, valueText) {
   return row
 }
 
+function createAppearanceSection() {
+  const section = document.createElement('section')
+  section.className = 'settings-theme-section'
+  section.setAttribute('aria-labelledby', 'settings-appearance-title')
+  const title = document.createElement('h3')
+  title.id = 'settings-appearance-title'
+  title.className = 'settings-section-title'
+  title.textContent = 'Appearance'
+
+  const animations = createSettingsRow('Animations', 'System')
+  animations.setAttribute('aria-describedby', 'settings-animations-hint')
+  const hint = document.createElement('p')
+  hint.id = 'settings-animations-hint'
+  hint.className = 'dialog-copy settings-hint'
+  hint.textContent = 'System follows your device’s motion preferences.'
+  section.append(title, animations, hint, createThemeSection())
+  return section
+}
+
 function createThemeSection() {
   const section = document.createElement('section')
   section.className = 'settings-theme-section'
   section.setAttribute('aria-labelledby', 'settings-theme-title')
 
-  const title = document.createElement('h3')
+  const title = document.createElement('h4')
   title.id = 'settings-theme-title'
-  title.className = 'settings-section-title'
+  title.className = 'settings-section-title settings-subsection-title'
   title.textContent = 'Theme'
 
   const grid = document.createElement('div')

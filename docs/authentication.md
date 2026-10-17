@@ -1,7 +1,7 @@
 # Optional accounts (Phase 3)
 
 Taskly works without an account. Open **Settings > Account** for **Log in** and
-**Create account**. Signed-in users see their email, “Tasks are saved on this
+**Create account**. Signed-in users see their email, “Tasks saved on this
 device.” and **Log out**. Login, signup and **Forgot password?** forms appear
 inside Settings. Signup includes password confirmation.
 

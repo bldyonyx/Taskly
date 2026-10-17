@@ -33,7 +33,27 @@ h1 {
 }
 
 .account-email {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   overflow-wrap: anywhere;
+}
+
+.account-email span {
+  min-width: 0;
+}
+
+.account-email svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.settings-account-section {
+  padding: 12px;
+  border: 2px solid var(--color-subtle-border);
+  border-radius: 14px;
+  background: var(--color-translucent-surface);
 }
 
 .account-device-note {
@@ -1179,6 +1199,14 @@ h1 {
   line-height: 1;
   letter-spacing: 0;
   font-variation-settings: 'SOFT' 92;
+}
+
+.settings-subsection-title {
+  font-size: 0.94rem;
+}
+
+.settings-hint {
+  font-size: 0.8rem;
 }
 
 .theme-options {

@@ -1,4 +1,6 @@
 import { authSession } from '../auth/index.js'
+import { UserRound } from 'lucide'
+import { makeIcon } from './icons.js'
 
 function button(text, secondary = false) {
   const element = document.createElement('button')
@@ -49,21 +51,23 @@ export function createAccountSection(session = authSession) {
     error.textContent = state.error
     error.hidden = !state.error
     content.append(error)
+    const deviceNote = document.createElement('p')
+    deviceNote.className = 'dialog-copy account-device-note'
+    deviceNote.textContent = 'Tasks saved on this device.'
 
     if (state.phase === 'authenticated') {
       const identity = document.createElement('p')
       identity.className = 'dialog-copy account-email'
-      identity.textContent = state.user.email || 'Your Taskly account'
-      const copy = document.createElement('p')
-      copy.className = 'dialog-copy account-device-note'
-      copy.textContent = 'Tasks are saved on this device.'
+      const emailText = document.createElement('span')
+      emailText.textContent = state.user.email || 'Your Taskly account'
+      identity.append(makeIcon(UserRound), emailText)
       const logout = button(state.pending === 'logout' ? 'Logging out…' : 'Log out')
       logout.disabled = Boolean(state.pending)
       logout.addEventListener('click', () => { void session.perform('logout') })
       const actions = document.createElement('div')
       actions.className = 'dialog-actions'
       actions.append(logout)
-      content.append(identity, copy, actions)
+      content.append(identity, deviceNote, actions)
     } else if (state.phase === 'guest' && !mode) {
       const welcome = document.createElement('p')
       welcome.className = 'dialog-copy'
@@ -80,7 +84,7 @@ export function createAccountSection(session = authSession) {
         })
         actions.append(action)
       }
-      content.append(welcome, actions)
+      content.append(welcome, deviceNote, actions)
     } else if (state.phase === 'guest') {
       const form = document.createElement('form')
       form.className = 'taskly-dialog-form account-form'
@@ -160,7 +164,9 @@ export function createAccountSection(session = authSession) {
         })
         navigation.append(link)
       }
-      content.append(form, navigation)
+      content.append(deviceNote, form, navigation)
+    } else {
+      content.append(deviceNote)
     }
     if (hadFocus) content.focus()
   }
