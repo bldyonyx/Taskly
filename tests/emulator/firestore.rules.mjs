@@ -4,6 +4,9 @@ import assert from 'node:assert/strict'
 import { initializeApp, deleteApp } from 'firebase/app'
 import { initializeFirestore, connectFirestoreEmulator, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, terminate } from 'firebase/firestore'
 import { documents } from '../helpers/firestore-fixtures.js'
+import { createFirestoreTransport } from '../../src/js/firestore/firebase.js'
+import { createFirestoreRepository } from '../../src/js/firestore/repository.js'
+import { createAccountData } from '../../src/js/data/account.js'
 
 const projectId = 'demo-taskly-rules'
 const host = process.env.FIRESTORE_EMULATOR_HOST
@@ -101,4 +104,50 @@ test('owners can delete their own documents; deletes do not grant cross-user rig
   await setDoc(ref('alice', path), { ownerId: 'alice', schemaVersion: 1, dateKey: '2026-10-20', currentListId: null })
   await deleteDoc(ref('alice', path))
   assert.equal((await getDoc(ref('alice', path))).exists(), false)
+})
+
+test('account operations use rules-compatible atomic transactions through the real SDK adapter', async () => {
+  const session = { getState: () => ({ phase: 'authenticated', user: { uid: 'alice' } }),
+    subscribe: () => () => {} }
+  const repository = createFirestoreRepository({ uid: 'alice', session,
+    transport: createFirestoreTransport({ database: () => db, check: () => {} }) })
+  const account = createAccountData(repository)
+  const dateKey = '2026-11-01'
+  await account.createTask(dateKey, { id: 'one', text: 'One', completed: false }, 0)
+  await account.createTask(dateKey, { id: 'two', text: 'Two', completed: false }, 1)
+  await account.completeTask(dateKey, 'one', true)
+  await account.editTask(dateKey, 'two', 'Edited')
+  await account.reorderTasks(dateKey, ['two', 'one'])
+  const tasks = await account.loadTasks(dateKey)
+  assert.deepEqual(tasks.map(({ id }) => id), ['two', 'one'])
+  const snapshotTasks = tasks.map(({ id, text, completed }) => ({ id, text, completed }))
+  await account.saveList({ id: 'atomic-list', name: 'Atomic', createdAt: 'original', updatedAt: 'original', order: 0, tasks: snapshotTasks })
+  await account.setCurrentList(dateKey, 'atomic-list')
+  assert.equal(await account.loadCurrentList(dateKey), 'atomic-list')
+  await account.createFinishedDay({ id: 'atomic-finished', dateKey, date: dateKey, createdAt: 'original', order: 0,
+    completedCount: 1, totalCount: 2, tasks: snapshotTasks })
+  assert.deepEqual((await account.loadFinishedDays()).find(({ id }) => id === 'atomic-finished').tasks.map(({ id }) => id), ['two', 'one'])
+  await account.saveTheme('rose')
+  assert.equal(await account.loadTheme(), 'rose')
+  const listPath = 'savedLists/atomic-list'
+  const original = await repository.read(listPath)
+  await assert.rejects(repository.write(listPath, { ...original, createdAt: 'changed' }), /Immutable/)
+  assert.deepEqual(await repository.read(listPath), original)
+  await assert.rejects(repository.remove(listPath), /Parent deletion/)
+  // The second invalid mutation makes the entire transaction fail before commit.
+  await assert.rejects(repository.atomic(['preferences/general', listPath], () => [
+    { path: 'preferences/general', data: { schemaVersion: 1, ownerId: 'alice', themeId: 'forest' } },
+    { path: listPath, data: { ...original, createdAt: 'changed' } },
+  ]), /Immutable/)
+  assert.equal(await account.loadTheme(), 'rose')
+  // Prove server rules reject an entire transaction, with no partial valid write.
+  const transport = createFirestoreTransport({ database: () => db, check: () => {} })
+  await denied(transport.transact(['users/alice/preferences/general', `users/alice/${listPath}`], () => [
+    { path: 'users/alice/preferences/general', data: { schemaVersion: 1, ownerId: 'alice', themeId: 'forest' } },
+    { path: `users/alice/${listPath}`, data: { ...original, createdAt: 'changed' } },
+  ]))
+  assert.equal(await account.loadTheme(), 'rose')
+  await account.deleteTask(dateKey, 'one')
+  assert.equal((await account.loadTasks(dateKey)).length, 1)
+  account.dispose()
 })

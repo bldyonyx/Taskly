@@ -53,6 +53,12 @@ import { applySavedTheme } from './js/ui/themes.js'
 import { getAccessibleDateLabel, getDateKey, parseDateKey, renderDate } from './js/utils/date.js'
 import { prepareLocalData } from './js/ui/backupControls.js'
 import { authSession } from './js/auth/index.js'
+import { createDataBoundary } from './js/data/boundary.js'
+
+// Preparatory account boundary only. The Phase 4.2 UI remains explicitly bound
+// to the local guest workspace above, even while identity is authenticated.
+// Never use that workspace to seed an account context.
+export const dataBoundary = createDataBoundary({ session: authSession, guestRepository: repository })
 
 if (!prepareLocalData()) throw new Error('Taskly startup paused for data recovery.')
 applySavedTheme()

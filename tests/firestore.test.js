@@ -95,6 +95,11 @@ function fixture(phase = 'authenticated') {
   const data = documents().find((doc) => doc.path === 'days/2026-10-18').data
   const session = { getState: () => state, subscribe(fn) { listeners.add(fn); fn(state); return () => listeners.delete(fn) } }
   const transport = {
+    async transact(paths, plan) {
+      for (const change of plan(paths.map(() => null))) {
+        calls.push([change.data === null ? 'remove' : 'write', change.path, ...(change.data === null ? [] : [change.data])])
+      }
+    },
     async read(path) { calls.push(['read', path]); return data },
     async write(path, value) { calls.push(['write', path, value]) },
     async remove(path) { calls.push(['remove', path]) },
@@ -129,8 +134,9 @@ test('explicit operations validate data and scope every path to the bound accoun
   assert.deepEqual(f.calls[1], ['write', 'users/alice/days/2026-10-18', f.data])
   await assert.rejects(repo.write('days/2026-10-18', { ...f.data, ownerId: 'bob' }))
   await assert.rejects(repo.read('users/bob/days/2026-10-18'))
-  await repo.remove('days/2026-10-18')
-  assert.equal(f.calls.at(-1)[1], 'users/alice/days/2026-10-18')
+  await assert.rejects(repo.remove('days/2026-10-18'), /Parent deletion is disabled/)
+  await repo.remove('days/2026-10-18/tasks/task-b')
+  assert.equal(f.calls.at(-1)[1], 'users/alice/days/2026-10-18/tasks/task-b')
   repo.dispose()
 })
 

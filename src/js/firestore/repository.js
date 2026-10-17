@@ -1,4 +1,4 @@
-import { validId, describeDocument, validateCollection, validateDocument } from './schema.js'
+import { validId, describeDocument, validateCollection, validateDocument, validateTransition } from './schema.js'
 
 // Explicitly bound to one authenticated session; never reused after sign-out or
 // account switching. No local repository or guest-data fallback is accepted.
@@ -26,7 +26,46 @@ export function createFirestoreRepository({ uid, session, transport }) {
     describeDocument(path)
     return `users/${uid}${path ? `/${path}` : ''}`
   }
+  async function atomic(paths, plan) {
+    assertActive()
+    if (!transport.transact) throw new Error('Server transactions are required for account writes.')
+    const unique = [...new Set(paths)]
+    unique.forEach(documentPath)
+    // Bounded, all-or-nothing operations; never split snapshots into partial batches.
+    if (unique.length > 400) throw new Error('Operation exceeds the safe transaction limit.')
+    await transport.transact(unique.map(documentPath), (values) => {
+      assertActive()
+      const previous = Object.fromEntries(unique.map((path, i) => [path,
+        values[i] === null ? null : validateDocument(uid, path, values[i])]))
+      const changes = plan(structuredClone(previous))
+      if (!Array.isArray(changes)) throw new Error('Expected a synchronous transaction plan.')
+      const seen = new Set()
+      return changes.map(({ path, data }) => {
+        if (!unique.includes(path) || seen.has(path)) throw new Error('Unplanned or duplicate transaction path.')
+        seen.add(path)
+        if (data === null) assertLeaf(path)
+        else validateTransition(uid, path, previous[path], data)
+        return { path: documentPath(path), data: structuredClone(data) }
+      })
+    })
+    assertActive()
+    return { confirmed: true }
+  }
+  function assertLeaf(path) {
+    if (['user', 'day', 'savedList', 'finishedDay'].includes(describeDocument(path).kind)) {
+      throw new Error('Parent deletion is disabled: nested tasks and references require coordinated cleanup.')
+    }
+  }
   return {
+    uid,
+    atomic,
+    async list(path) {
+      assertActive()
+      validateCollection(path)
+      const records = await transport.list(`users/${uid}/${path}`)
+      assertActive()
+      return records.map(({ id, data }) => ({ id, data: validateDocument(uid, `${path}/${id}`, data) }))
+    },
     async read(path) {
       assertActive()
       const data = await transport.read(documentPath(path))
@@ -37,13 +76,12 @@ export function createFirestoreRepository({ uid, session, transport }) {
       assertActive()
       // Detach caller state before handing it to an asynchronous transport.
       const copy = structuredClone(validateDocument(uid, path, data))
-      await transport.write(documentPath(path), copy)
-      assertActive()
+      return atomic([path], () => [{ path, data: copy }])
     },
     async remove(path) {
       assertActive()
-      await transport.remove(documentPath(path))
-      assertActive()
+      assertLeaf(path)
+      return atomic([path], () => [{ path, data: null }])
     },
     subscribe(path, onData, onError = () => {}) {
       assertActive()

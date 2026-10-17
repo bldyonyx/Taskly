@@ -1,5 +1,5 @@
 import { getAuth } from 'firebase/auth'
-import { getFirestore, doc, collection, getDocFromServer, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore'
+import { getFirestore, doc, collection, getDocFromServer, getDocsFromServer, runTransaction, onSnapshot } from 'firebase/firestore'
 import { createFirestoreRepository } from './repository.js'
 
 // Not imported by the running app. Future callers must explicitly supply the
@@ -17,19 +17,46 @@ export async function createFirebaseFirestoreRepository({ app, session }) {
   // Database initialization is deferred until an explicit operation, not factory
   // construction. Default memory cache only; no persistent disk cache is enabled.
   const database = () => { check(); return getFirestore(app) }
-  return createFirestoreRepository({ uid, session, transport: {
+  return createFirestoreRepository({ uid, session, transport: createFirestoreTransport({ database, check }) })
+}
+
+// Injectable database resolver also lets emulator tests exercise the real SDK
+// adapter without initializing production Auth or touching production endpoints.
+export function createFirestoreTransport({ database, check }) {
+  return {
     async read(path) {
       const snapshot = await getDocFromServer(doc(database(), path))
       check()
       return snapshot.exists() ? snapshot.data() : null
     },
-    async write(path, data) { await setDoc(doc(database(), path), data); check() },
-    async remove(path) { await deleteDoc(doc(database(), path)); check() },
-    subscribe: (path, next, onError) => onSnapshot(collection(database(), path), (snapshot) => {
+    async list(path) {
+      const snapshot = await getDocsFromServer(collection(database(), path))
+      check()
+      return snapshot.docs.map((item) => ({ id: item.id, data: item.data() }))
+    },
+    async transact(paths, plan) {
+      const db = database()
+      await runTransaction(db, async (transaction) => {
+        check()
+        const refs = paths.map((path) => doc(db, path))
+        const snapshots = await Promise.all(refs.map((ref) => transaction.get(ref)))
+        check()
+        const changes = plan(snapshots.map((snapshot) => snapshot.exists() ? snapshot.data() : null))
+        check()
+        for (const { path, data } of changes) {
+          if (data === null) transaction.delete(doc(db, path))
+          else transaction.set(doc(db, path), data)
+        }
+      })
+      check()
+    },
+    subscribe: (path, next, onError) => onSnapshot(collection(database(), path), { includeMetadataChanges: true }, (snapshot) => {
       try {
         check()
+        // Cache and local pending mutations are never represented as server confirmation.
+        if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return
         next(snapshot.docs.map((item) => ({ id: item.id, data: item.data() })))
       } catch (error) { onError(error) }
     }, onError),
-  } })
+  }
 }

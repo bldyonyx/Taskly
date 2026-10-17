@@ -75,6 +75,22 @@ export function validateDocument(uid, path, data) {
   return data
 }
 
+// Rules validate transitions as well as document shape. Run this inside the
+// transaction that reads the previous document so concurrent edits cannot bypass it.
+export function validateTransition(uid, path, previous, next) {
+  validateDocument(uid, path, next)
+  if (!previous) return next
+  validateDocument(uid, path, previous)
+  const { kind } = describeDocument(path)
+  const immutable = {
+    savedList: ['createdAt'], finishedDay: ['dateKey', 'date', 'createdAt'],
+    import: ['sourceId', 'backupHash', 'createdAt'],
+  }[kind] ?? []
+  requireThat(immutable.every((key) => previous[key] === next[key]), 'Immutable document fields cannot change.')
+  requireThat(kind !== 'import' || previous.status !== 'complete' || next.status === 'complete', 'A completed import cannot become pending.')
+  return next
+}
+
 // Pure planning utility for a later, explicitly confirmed import. It never reads
 // localStorage, creates IDs, converts timestamps, or performs database operations.
 export function mapLocalStateToDocuments(state, { uid, themeId, finishedDayDateKeys = {} }) {

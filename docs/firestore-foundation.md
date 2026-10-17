@@ -1,5 +1,9 @@
 # Firestore foundation (Phase 4.1)
 
+For current lifecycle safeguards, test results and remaining activation blockers,
+see [Phase 4.2 account integration](account-data-integration.md). The text below
+records the original Phase 4.1 implementation and verification status.
+
 This phase adds a dormant schema, repository and rules. Nothing in `main.js`,
 Authentication, Settings or the local repository imports the Firestore foundation.
 Guest and signed-in task data still live exclusively in localStorage. There is no

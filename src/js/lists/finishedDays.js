@@ -1,5 +1,6 @@
 import { normalizeTasks } from '../storage/storage.js'
 import { getLocalDateKey } from '../utils/date.js'
+import { validDateKey } from '../firestore/schema.js'
 
 const FINISHED_DAYS_KEY = 'taskly.finishedDays.v1'
 
@@ -20,6 +21,7 @@ export function loadFinishedDays(storage = localStorage) {
         return {
           id: typeof day.id === 'string' ? day.id : crypto.randomUUID(),
           date: day.date,
+          ...(validDateKey(day.dateKey) ? { dateKey: day.dateKey } : {}),
           tasks,
           completedCount,
           totalCount: tasks.length,
@@ -44,6 +46,7 @@ export function createFinishedDay(tasks, date = new Date()) {
   return {
     id: crypto.randomUUID(),
     date: createdAt,
+    dateKey: getLocalDateKey(date),
     tasks: normalizedTasks,
     completedCount,
     totalCount: normalizedTasks.length,
@@ -56,7 +59,7 @@ export function createFinishedDayTaskSnapshot(tasks) {
 }
 
 export function getFinishedDayDateKey(day) {
-  return getLocalDateKey(day?.date)
+  return validDateKey(day?.dateKey) ? day.dateKey : getLocalDateKey(day?.date)
 }
 
 export function getFinishedDayDateKeys(days) {
