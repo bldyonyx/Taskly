@@ -32,6 +32,7 @@ export function describeDocument(path) {
     if (collection === 'finishedDays') return { kind: 'finishedDay', id }
     if (collection === 'preferences' && id === 'general') return { kind: 'preferences', id }
     if (collection === 'imports') return { kind: 'import', id }
+    if (collection === 'lifecycle' && id === 'state') return { kind: 'lifecycle', id }
   }
   if (parts.length === 4 && child === 'tasks' && ['days', 'savedLists', 'finishedDays'].includes(collection)) {
     requireThat(collection !== 'days' || validDateKey(id), 'Invalid day date key.')
@@ -42,7 +43,7 @@ export function describeDocument(path) {
 
 export function validateCollection(path) {
   requireThat(typeof path === 'string', 'A relative collection path is required.')
-  if (['days', 'savedLists', 'finishedDays', 'preferences', 'imports'].includes(path)) return path
+  if (['days', 'savedLists', 'finishedDays', 'preferences', 'imports', 'lifecycle'].includes(path)) return path
   const parts = path.split('/')
   requireThat(parts.length === 3 && parts[2] === 'tasks', 'Unsupported collection path.')
   requireThat(['day', 'savedList', 'finishedDay'].includes(describeDocument(parts.slice(0, 2).join('/')).kind), 'Unsupported task collection.')
@@ -54,7 +55,7 @@ export function validateDocument(uid, path, data) {
   requireThat(validId(uid), 'A valid account UID is required.')
   const { kind, id } = describeDocument(path)
   const fields = {
-    user: [], day: ['dateKey', 'currentListId'], task: ['id', 'text', 'completed', 'order'],
+    user: [], lifecycle: ['revision', 'parents'], day: ['dateKey', 'currentListId'], task: ['id', 'text', 'completed', 'order'],
     savedList: ['id', 'name', 'createdAt', 'updatedAt', 'order'],
     finishedDay: ['id', 'dateKey', 'date', 'createdAt', 'completedCount', 'totalCount', 'order'],
     preferences: ['themeId'], import: ['id', 'sourceId', 'backupHash', 'status', 'createdAt', 'completedAt'],
@@ -62,6 +63,16 @@ export function validateDocument(uid, path, data) {
   requireThat(record(data) && Object.keys(data).length === fields.length
     && fields.every((key) => Object.hasOwn(data, key)), 'Unexpected or missing document fields.')
   requireThat(data.schemaVersion === SCHEMA_VERSION && data.ownerId === uid, 'Invalid schema version or document owner.')
+  if (kind === 'lifecycle') {
+    requireThat(integer(data.revision) && record(data.parents), 'Invalid lifecycle manifest.')
+    let count = 1
+    for (const [parent, ids] of Object.entries(data.parents)) {
+      requireThat(['day', 'savedList', 'finishedDay'].includes(describeDocument(parent).kind)
+        && Array.isArray(ids) && ids.every(validId) && new Set(ids).size === ids.length, 'Invalid manifest membership.')
+      count += 1 + ids.length
+    }
+    requireThat(count <= 350 && JSON.stringify(data).length <= 200000, 'Account exceeds the bounded lifecycle limit.')
+  }
   if (['task', 'savedList', 'finishedDay', 'import'].includes(kind)) requireThat(data.id === id, 'Document ID does not match its path.')
   if (kind === 'day') requireThat(data.dateKey === id && (data.currentListId === null || validId(data.currentListId)), 'Invalid day or saved-list reference.')
   if (kind === 'task') requireThat(string(data.text, 10000) && typeof data.completed === 'boolean' && integer(data.order), 'Invalid task.')
@@ -88,6 +99,7 @@ export function validateTransition(uid, path, previous, next) {
   }[kind] ?? []
   requireThat(immutable.every((key) => previous[key] === next[key]), 'Immutable document fields cannot change.')
   requireThat(kind !== 'import' || previous.status !== 'complete' || next.status === 'complete', 'A completed import cannot become pending.')
+  requireThat(kind !== 'lifecycle' || next.revision === previous.revision + 1, 'Lifecycle revision must increase exactly once.')
   return next
 }
 

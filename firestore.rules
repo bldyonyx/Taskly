@@ -21,24 +21,58 @@ service cloud.firestore {
       return base(d, uid, ['id', 'text', 'completed', 'order']) && d.id == taskId
         && id(taskId) && text(d.text, 10000) && d.completed is bool && nonnegative(d.order);
     }
+    // Every aggregate mutation participates in one owner-scoped membership CAS.
+    // Cacheable get/getAfter calls keep large snapshots within rule access limits.
+    function lifecycleChanged(uid) {
+      let p = /databases/$(database)/documents/users/$(uid)/lifecycle/state;
+      return getAfter(p).data.revision == get(p).data.revision + 1;
+    }
+    function parentPresent(uid, parent) {
+      return parent in getAfter(/databases/$(database)/documents/users/$(uid)/lifecycle/state).data.parents;
+    }
+    function member(uid, parent, taskId) {
+      return parentPresent(uid, parent)
+        && getAfter(/databases/$(database)/documents/users/$(uid)/lifecycle/state).data.parents[parent].hasAny([taskId]);
+    }
+    function orderedMember(uid, parent, d) {
+      let ids = getAfter(/databases/$(database)/documents/users/$(uid)/lifecycle/state).data.parents[parent];
+      return d.order < ids.size() && ids[d.order] == d.id;
+    }
     match /users/{uid} {
       allow read: if owner(uid);
       allow create: if owner(uid) && base(request.resource.data, uid, []);
       allow update: if owner(uid) && resource.data.ownerId == uid && base(request.resource.data, uid, []);
       allow delete: if owner(uid);
 
+      match /lifecycle/{stateId} {
+        function valid(d) {
+          return stateId == 'state' && base(d, uid, ['revision', 'parents'])
+            && nonnegative(d.revision) && d.parents is map && d.parents.size() <= 349;
+        }
+        allow read: if owner(uid) && stateId == 'state';
+        allow create: if owner(uid) && valid(request.resource.data)
+          && request.resource.data.revision == 0 && request.resource.data.parents.size() == 0;
+        allow update: if owner(uid) && valid(request.resource.data)
+          && request.resource.data.revision == resource.data.revision + 1;
+        allow delete: if false;
+      }
+
       match /days/{dayId} {
         function valid(d) {
           return base(d, uid, ['dateKey', 'currentListId']) && dateKey(dayId) && d.dateKey == dayId
             && (d.currentListId == null || id(d.currentListId));
         }
-        allow read, delete: if owner(uid);
-        allow create: if owner(uid) && valid(request.resource.data);
-        allow update: if owner(uid) && resource.data.ownerId == uid && valid(request.resource.data);
+        allow read: if owner(uid);
+        allow delete: if owner(uid) && lifecycleChanged(uid) && !parentPresent(uid, 'days/' + dayId);
+        allow create: if owner(uid) && lifecycleChanged(uid) && parentPresent(uid, 'days/' + dayId) && valid(request.resource.data);
+        allow update: if owner(uid) && lifecycleChanged(uid) && parentPresent(uid, 'days/' + dayId) && resource.data.ownerId == uid && valid(request.resource.data);
         match /tasks/{taskId} {
-          allow read, delete: if owner(uid);
-          allow create: if owner(uid) && dateKey(dayId) && task(request.resource.data, uid, taskId);
-          allow update: if owner(uid) && resource.data.ownerId == uid && dateKey(dayId) && task(request.resource.data, uid, taskId);
+          allow read: if owner(uid);
+          allow delete: if owner(uid) && lifecycleChanged(uid) && !member(uid, 'days/' + dayId, taskId);
+          allow create, update: if owner(uid) && lifecycleChanged(uid) && member(uid, 'days/' + dayId, taskId)
+            && existsAfter(/databases/$(database)/documents/users/$(uid)/days/$(dayId))
+            && dateKey(dayId) && task(request.resource.data, uid, taskId)
+            && orderedMember(uid, 'days/' + dayId, request.resource.data);
         }
       }
       match /savedLists/{listId} {
@@ -46,14 +80,18 @@ service cloud.firestore {
           return base(d, uid, ['id', 'name', 'createdAt', 'updatedAt', 'order']) && d.id == listId && id(listId)
             && text(d.name, 200) && text(d.createdAt, 64) && text(d.updatedAt, 64) && nonnegative(d.order);
         }
-        allow read, delete: if owner(uid);
-        allow create: if owner(uid) && valid(request.resource.data);
-        allow update: if owner(uid) && resource.data.ownerId == uid && valid(request.resource.data)
+        allow read: if owner(uid);
+        allow delete: if owner(uid) && lifecycleChanged(uid) && !parentPresent(uid, 'savedLists/' + listId);
+        allow create: if owner(uid) && lifecycleChanged(uid) && parentPresent(uid, 'savedLists/' + listId) && valid(request.resource.data);
+        allow update: if owner(uid) && lifecycleChanged(uid) && parentPresent(uid, 'savedLists/' + listId) && resource.data.ownerId == uid && valid(request.resource.data)
           && request.resource.data.createdAt == resource.data.createdAt;
         match /tasks/{taskId} {
-          allow read, delete: if owner(uid);
-          allow create: if owner(uid) && id(listId) && task(request.resource.data, uid, taskId);
-          allow update: if owner(uid) && resource.data.ownerId == uid && id(listId) && task(request.resource.data, uid, taskId);
+          allow read: if owner(uid);
+          allow delete: if owner(uid) && lifecycleChanged(uid) && !member(uid, 'savedLists/' + listId, taskId);
+          allow create, update: if owner(uid) && lifecycleChanged(uid) && member(uid, 'savedLists/' + listId, taskId)
+            && existsAfter(/databases/$(database)/documents/users/$(uid)/savedLists/$(listId))
+            && id(listId) && task(request.resource.data, uid, taskId)
+            && orderedMember(uid, 'savedLists/' + listId, request.resource.data);
         }
       }
       match /finishedDays/{finishedId} {
@@ -62,15 +100,19 @@ service cloud.firestore {
             && d.id == finishedId && id(finishedId) && dateKey(d.dateKey) && text(d.date, 64) && text(d.createdAt, 64)
             && nonnegative(d.completedCount) && nonnegative(d.totalCount) && d.completedCount <= d.totalCount && nonnegative(d.order);
         }
-        allow read, delete: if owner(uid);
-        allow create: if owner(uid) && valid(request.resource.data);
-        allow update: if owner(uid) && resource.data.ownerId == uid && valid(request.resource.data)
+        allow read: if owner(uid);
+        allow delete: if owner(uid) && lifecycleChanged(uid) && !parentPresent(uid, 'finishedDays/' + finishedId);
+        allow create: if owner(uid) && lifecycleChanged(uid) && parentPresent(uid, 'finishedDays/' + finishedId) && valid(request.resource.data);
+        allow update: if owner(uid) && lifecycleChanged(uid) && parentPresent(uid, 'finishedDays/' + finishedId) && resource.data.ownerId == uid && valid(request.resource.data)
           && request.resource.data.dateKey == resource.data.dateKey
           && request.resource.data.date == resource.data.date && request.resource.data.createdAt == resource.data.createdAt;
         match /tasks/{taskId} {
-          allow read, delete: if owner(uid);
-          allow create: if owner(uid) && id(finishedId) && task(request.resource.data, uid, taskId);
-          allow update: if owner(uid) && resource.data.ownerId == uid && id(finishedId) && task(request.resource.data, uid, taskId);
+          allow read: if owner(uid);
+          allow delete: if owner(uid) && lifecycleChanged(uid) && !member(uid, 'finishedDays/' + finishedId, taskId);
+          allow create, update: if owner(uid) && lifecycleChanged(uid) && member(uid, 'finishedDays/' + finishedId, taskId)
+            && existsAfter(/databases/$(database)/documents/users/$(uid)/finishedDays/$(finishedId))
+            && id(finishedId) && task(request.resource.data, uid, taskId)
+            && orderedMember(uid, 'finishedDays/' + finishedId, request.resource.data);
         }
       }
       match /preferences/{preferenceId} {

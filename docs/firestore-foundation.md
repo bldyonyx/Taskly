@@ -1,7 +1,7 @@
 # Firestore foundation (Phase 4.1)
 
 For current lifecycle safeguards, test results and remaining activation blockers,
-see [Phase 4.2 account integration](account-data-integration.md). The text below
+see [Phase 4.3 cloud lifecycle safety](cloud-lifecycle-safety.md). The text below
 records the original Phase 4.1 implementation and verification status.
 
 This phase adds a dormant schema, repository and rules. Nothing in `main.js`,

@@ -26,7 +26,7 @@ export function createFirestoreRepository({ uid, session, transport }) {
     describeDocument(path)
     return `users/${uid}${path ? `/${path}` : ''}`
   }
-  async function atomic(paths, plan) {
+  async function atomic(paths, plan, { cascade = false } = {}) {
     assertActive()
     if (!transport.transact) throw new Error('Server transactions are required for account writes.')
     const unique = [...new Set(paths)]
@@ -43,7 +43,19 @@ export function createFirestoreRepository({ uid, session, transport }) {
       return changes.map(({ path, data }) => {
         if (!unique.includes(path) || seen.has(path)) throw new Error('Unplanned or duplicate transaction path.')
         seen.add(path)
-        if (data === null) assertLeaf(path)
+        if (data === null) {
+          if (describeDocument(path).kind === 'lifecycle') throw new Error('Lifecycle history cannot be deleted.')
+          if (!cascade) assertLeaf(path)
+          else if (['day', 'savedList', 'finishedDay'].includes(describeDocument(path).kind)) {
+            const manifest = previous['lifecycle/state']
+            const nextManifest = changes.find((item) => item.path === 'lifecycle/state')?.data
+            const ids = manifest?.parents[path]
+            if (!ids || !nextManifest || Object.hasOwn(nextManifest.parents, path)
+              || ids.some((id) => !changes.some((item) => item.path === `${path}/tasks/${id}` && item.data === null))) {
+              throw new Error('Cascade must remove all manifest children and parent membership atomically.')
+            }
+          } else if (describeDocument(path).kind === 'user') assertLeaf(path)
+        }
         else validateTransition(uid, path, previous[path], data)
         return { path: documentPath(path), data: structuredClone(data) }
       })
@@ -58,6 +70,7 @@ export function createFirestoreRepository({ uid, session, transport }) {
   }
   return {
     uid,
+    assertActive,
     atomic,
     async list(path) {
       assertActive()

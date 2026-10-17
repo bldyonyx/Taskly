@@ -1,5 +1,10 @@
 # Phase 4.2: dormant account data integration
 
+Phase 4.3 supersedes the lifecycle API and blockers below. See
+[Cloud lifecycle safety](cloud-lifecycle-safety.md) for versioned membership,
+atomic replacement/cascade/Finish Day, proposed local rules and current limits.
+This document retains the Phase 4.2 architecture and verification history.
+
 Production synchronization remains disabled. No deployment, migration, commit,
 push or production data operation is part of this phase. Firestore rules are
 unchanged. This document supersedes the Phase 4.1 lifecycle limitations and old

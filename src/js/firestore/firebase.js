@@ -36,6 +36,12 @@ export function createFirestoreTransport({ database, check }) {
     },
     async transact(paths, plan) {
       const db = database()
+      if (paths.length === 0) throw new Error('A transaction requires at least one document.')
+      // SDK transaction RPCs can bypass disableNetwork's stream state. Require
+      // a server-only read through the regular client before submitting a commit.
+      // This is a connectivity check, not a replacement for transaction reads.
+      await getDocFromServer(doc(db, paths[0]))
+      check()
       await runTransaction(db, async (transaction) => {
         check()
         const refs = paths.map((path) => doc(db, path))

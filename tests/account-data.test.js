@@ -7,6 +7,7 @@ import { createFirestoreRepository } from '../src/js/firestore/repository.js'
 import { validateTransition } from '../src/js/firestore/schema.js'
 import { createFinishedDay, getFinishedDayDateKey, loadFinishedDays } from '../src/js/lists/finishedDays.js'
 import { documents } from './helpers/firestore-fixtures.js'
+import { inspectFinishedDayDates, resolveFinishedDayDates } from '../src/js/data/legacyFinishedDays.js'
 
 function fixture() {
   let state = { phase: 'guest', user: null, pending: null }
@@ -40,7 +41,12 @@ function fixture() {
   }
   return { session, emit, db, calls, transport,
     fail: (value) => { fail = value }, pause: (value) => { pause = value },
-    account(uid) { emit(uid); return createAccountData(createFirestoreRepository({ uid, session, transport })) },
+    account(uid) {
+      emit(uid)
+      const path = `users/${uid}/lifecycle/state`
+      if (!db.has(path)) db.set(path, { schemaVersion: 1, ownerId: uid, revision: 0, parents: {} })
+      return createAccountData(createFirestoreRepository({ uid, session, transport }))
+    },
   }
 }
 const date = '2026-10-17'
@@ -74,7 +80,7 @@ test('empty accounts have no fallback; task mutations preserve IDs, order and ac
   await a.createTask(date, task('a'), 1)
   await a.editTask(date, 'b', 'edited')
   await a.completeTask(date, 'b', true)
-  await a.reorderTasks(date, ['a', 'b'])
+  await a.reorderTasks(date, ['a', 'b'], (await a.loadAccount()).revision)
   assert.deepEqual((await a.loadTasks(date)).map(({ id, order }) => [id, order]), [['a', 0], ['b', 1]])
   assert.equal((await a.loadTasks(date))[1].completed, true)
   await assert.rejects(a.createTask(date, task('a'), 0), /already exists/)
@@ -100,7 +106,7 @@ test('saved lists, references, finished snapshots and theme round trip without r
   assert.equal(await a.loadCurrentList(date), 'list')
   await assert.rejects(a.setCurrentList(date, 'missing'), /does not exist/)
   assert.deepEqual((await a.loadSavedLists())[0].tasks.map(({ id }) => id), ['b', 'a'])
-  await assert.rejects(a.saveList(list), /replacement is disabled/)
+  await assert.rejects(a.saveList(list), /explicit replacement/)
   const day = { id: 'finished', dateKey: date, date: '2026-10-16T22:00:00Z', createdAt: 'original', order: 0,
     totalCount: 2, completedCount: 0, tasks: list.tasks }
   await a.createFinishedDay(day)
@@ -118,15 +124,16 @@ test('failed writes are atomic and interrupted transaction retries cannot submit
   const a = f.account('alice')
   f.fail(true)
   await assert.rejects(a.createTask(date, task('a'), 0), /failed commit/)
-  assert.equal(f.db.size, 0)
+  assert.equal(f.db.size, 1) // Only the pre-seeded empty manifest exists.
   f.fail(false)
   let resume
   f.pause(() => new Promise((resolve) => { resume = resolve }))
   const writing = a.createTask(date, task('a'), 0)
+  await new Promise((resolve) => setImmediate(resolve))
   f.emit('bob'); f.emit('alice')
   resume()
   await assert.rejects(writing, /changed/)
-  assert.equal(f.db.size, 0)
+  assert.equal(f.db.size, 1)
 })
 
 test('immutable-field validation mirrors rules, including completed import transitions', () => {
@@ -164,11 +171,11 @@ test('a submitted commit may finish after logout but cannot report confirmation 
 test('late collection reads cannot return an old account snapshot', async () => {
   const f = fixture()
   let release
-  f.transport.list = () => new Promise((resolve) => { release = resolve })
+  f.transport.read = () => new Promise((resolve) => { release = resolve })
   const a = f.account('alice')
   const reading = a.loadSavedLists()
   f.emit(null); f.emit('alice')
-  release([])
+  release(null)
   await assert.rejects(reading, /changed/)
 })
 
@@ -185,4 +192,187 @@ test('startup gate has no Firebase adapter, environment override or automatic ac
   const boundary = readFileSync('src/js/data/boundary.js', 'utf8')
   assert.doesNotMatch(boundary, /import\s|import\.meta|localStorage\.getItem|createFirebase/)
   assert.doesNotMatch(readFileSync('src/main.js', 'utf8'), /createAccountData|createFirebaseFirestoreRepository/)
+})
+
+const listInput = (tasks = [task('a'), task('b')]) => ({ id: 'list', name: 'List', createdAt: 'original', updatedAt: 'original', order: 0, tasks })
+const revision = async (account) => (await account.loadAccount()).revision
+
+test('reordering rejects stale views, incomplete membership and concurrent device changes', async () => {
+  const f = fixture()
+  const a = f.account('alice')
+  const b = f.account('alice')
+  await a.createTask(date, task('a'), 0)
+  await a.createTask(date, task('b'), 1)
+  const version = await revision(a)
+  await a.reorderTasks(date, ['b', 'a'], version)
+  await assert.rejects(b.reorderTasks(date, ['a', 'b'], version), { code: 'taskly/conflict' })
+  await assert.rejects(a.reorderTasks(date, ['a'], await revision(a)), /complete current/)
+  await assert.rejects(async () => a.reorderTasks(date, ['a', 'b']), /expected account revision/)
+  const view = await revision(b)
+  await a.createTask(date, task('c'), 0)
+  await assert.rejects(b.reorderTasks(date, ['a', 'b'], view), { code: 'taskly/conflict' })
+  assert.deepEqual((await a.loadTasks(date)).map(({ id, order }) => [id, order]), [['c', 0], ['b', 1], ['a', 2]])
+})
+
+test('a revision changing between preparation and commit rejects the transaction plan', async () => {
+  const f = fixture()
+  const a = f.account('alice')
+  await a.createTask(date, task('a'), 0)
+  const version = await revision(a)
+  let resume
+  f.pause(() => new Promise((resolve) => { resume = resolve }))
+  const reorder = a.reorderTasks(date, ['a'], version)
+  await new Promise((resolve) => setImmediate(resolve))
+  f.db.get('users/alice/lifecycle/state').revision++
+  resume()
+  await assert.rejects(reorder, { code: 'taskly/conflict' })
+  assert.equal(f.db.get(`users/alice/days/${date}/tasks/a`).order, 0)
+})
+
+test('snapshot replacement is atomic, preserves references, and retries without mixed tasks', async () => {
+  const f = fixture()
+  const a = f.account('alice')
+  await a.saveList(listInput())
+  await a.setCurrentList(date, 'list')
+  const version = await revision(a)
+  const replacement = { ...listInput([task('b'), { ...task('c'), completed: true }]), name: 'Replaced', updatedAt: 'later' }
+  const before = structuredClone(f.db)
+  f.fail(true)
+  await assert.rejects(a.replaceSavedList(replacement, version), /failed commit/)
+  assert.deepEqual(f.db, before)
+  f.fail(false)
+  await a.replaceSavedList(replacement, version)
+  assert.equal(f.db.has('users/alice/savedLists/list/tasks/a'), false)
+  assert.deepEqual((await a.loadSavedLists())[0].tasks.map(({ id }) => id), ['b', 'c'])
+  assert.equal(await a.loadCurrentList(date), 'list')
+  await assert.rejects(a.replaceSavedList(listInput(), version), { code: 'taskly/conflict' })
+  const current = await revision(a)
+  await assert.rejects(a.replaceSavedList({ ...replacement, createdAt: 'changed' }, current), /Immutable/)
+  assert.equal(await revision(a), current)
+})
+
+test('cascading deletion removes children and references atomically and stale retries cannot delete a recreation', async () => {
+  const f = fixture()
+  const a = f.account('alice')
+  await a.saveList(listInput())
+  await a.setCurrentList(date, 'list')
+  await a.setCurrentList('2026-10-18', 'list')
+  const version = await revision(a)
+  const before = structuredClone(f.db)
+  f.fail(true)
+  await assert.rejects(a.deleteSavedList('list', version), /failed commit/)
+  assert.deepEqual(f.db, before)
+  f.fail(false)
+  await a.deleteSavedList('list', version)
+  assert.equal([...f.db.keys()].some((key) => key.startsWith('users/alice/savedLists/list')), false)
+  assert.equal(await a.loadCurrentList(date), null)
+  assert.equal(await a.loadCurrentList('2026-10-18'), null)
+  await a.saveList(listInput())
+  await assert.rejects(a.deleteSavedList('list', version), { code: 'taskly/conflict' })
+  assert.equal((await a.loadSavedLists()).length, 1)
+  await a.createTask(date, task('a'), 0)
+  await a.deleteDay(date, await revision(a))
+  assert.equal([...f.db.keys()].some((key) => key.startsWith(`users/alice/days/${date}`)), false)
+})
+
+test('Finish Day commits one exact snapshot and clear, preserves states and IDs, and rejects stale retries', async () => {
+  const f = fixture()
+  const a = f.account('alice')
+  await a.createTask(date, { ...task('a'), completed: true }, 0)
+  await a.createTask(date, task('b'), 1)
+  await a.saveList(listInput())
+  await a.setCurrentList(date, 'list')
+  const version = await revision(a)
+  const metadata = { id: 'finished', createdAt: 'time', order: 0 }
+  const before = structuredClone(f.db)
+  f.fail(true)
+  await assert.rejects(a.finishDay(date, metadata, version), /failed commit/)
+  assert.deepEqual(f.db, before)
+  f.fail(false)
+  await a.finishDay(date, metadata, version)
+  assert.deepEqual(await a.loadTasks(date), [])
+  assert.equal(await a.loadCurrentList(date), null)
+  const finished = (await a.loadFinishedDays())[0]
+  assert.equal(finished.dateKey, date)
+  assert.equal(finished.date, date)
+  assert.deepEqual(finished.tasks.map(({ id, completed }) => [id, completed]), [['a', true], ['b', false]])
+  assert.equal(finished.completedCount, 1)
+  assert.equal([...f.db.keys()].some((key) => key.startsWith(`users/alice/days/${date}/tasks/`)), false)
+  await a.createTask(date, task('new'), 0)
+  await assert.rejects(a.finishDay(date, metadata, version), { code: 'taskly/conflict' })
+  assert.equal((await a.loadTasks(date))[0].id, 'new')
+  await a.deleteFinishedDay('finished', await revision(a))
+  assert.equal([...f.db.keys()].some((key) => key.startsWith('users/alice/finishedDays/')), false)
+})
+
+test('uninitialized, corrupt and oversized accounts fail closed without adoption or partial writes', async () => {
+  const f = fixture()
+  const a = f.account('alice')
+  f.db.clear()
+  await assert.rejects(a.loadAccount(), { code: 'taskly/uninitialized' })
+  await assert.rejects(a.initializeEmptyAccount(), { code: 'taskly/confirmation-required' })
+  f.db.set(`users/alice/days/${date}`, { schemaVersion: 1, ownerId: 'alice', dateKey: date, currentListId: null })
+  await assert.rejects(a.initializeEmptyAccount({ confirmedEmpty: true }), { code: 'taskly/reconciliation-required' })
+  assert.equal(f.db.has('users/alice/lifecycle/state'), false)
+  f.db.clear()
+  await a.initializeEmptyAccount({ confirmedEmpty: true })
+  await assert.rejects(a.initializeEmptyAccount({ confirmedEmpty: true }), { code: 'taskly/conflict' })
+  await assert.rejects(a.saveList(listInput(Array.from({ length: 350 }, (_, i) => task(`t${i}`)))), /bounded lifecycle limit/)
+  assert.equal(f.db.size, 1)
+  await a.createTask(date, task('a'), 0)
+  f.db.delete(`users/alice/days/${date}/tasks/a`)
+  await assert.rejects(a.deleteDay(date, 1), { code: 'taskly/integrity' })
+})
+
+test('timestamp-only finished days require explicit, source-matched review without mutation', () => {
+  const records = [{ id: 'legacy', date: '2026-10-17T22:30:00Z', tasks: [task('a')] },
+    { id: 'stable', date: '2026-10-18', tasks: [] }]
+  const before = structuredClone(records)
+  assert.deepEqual(inspectFinishedDayDates(records).map(({ status }) => status), ['needs-review', 'resolved'])
+  assert.throws(() => resolveFinishedDayDates(records, []), { code: 'taskly/ambiguous-date' })
+  for (const patch of [{ reviewed: false }, { originalDate: 'changed' }, { dateKey: '2026-02-30' }]) {
+    assert.throws(() => resolveFinishedDayDates(records, [{ id: 'legacy', reviewed: true,
+      originalDate: records[0].date, dateKey: date, ...patch }]), { code: 'taskly/ambiguous-date' })
+  }
+  const resolved = resolveFinishedDayDates(records, [{ id: 'legacy', reviewed: true, originalDate: records[0].date, dateKey: '2026-10-18' }])
+  assert.equal(resolved[0].dateKey, '2026-10-18')
+  assert.equal(resolved[0].date, records[0].date)
+  assert.equal(resolved[1].dateKey, '2026-10-18')
+  assert.deepEqual(records, before)
+  assert.deepEqual(inspectFinishedDayDates([{ id: 'bad', date: '2026-02-30T22:00:00Z' },
+    { id: 'conflict', date: date, dateKey: '2026-10-18' }]).map(({ status }) => status), ['invalid', 'invalid'])
+})
+
+test('an acknowledged-late snapshot replacement cannot report success after an account switch', async () => {
+  const f = fixture()
+  const a = f.account('alice')
+  await a.saveList(listInput())
+  const version = await revision(a)
+  const original = f.transport.transact
+  let release
+  f.transport.transact = async (...args) => {
+    await original(...args)
+    await new Promise((resolve) => { release = resolve })
+  }
+  const writing = a.replaceSavedList(listInput([task('new')]), version)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(f.db.has('users/alice/savedLists/list/tasks/new'), true)
+  f.emit('bob')
+  release()
+  await assert.rejects(writing, /changed/)
+  assert.equal([...f.db.keys()].some((key) => key.startsWith('users/bob/')), false)
+})
+
+test('rules denials from competing commits become conflicts, genuine permission failures remain failures', async () => {
+  const f = fixture()
+  const a = f.account('alice')
+  await a.createTask(date, task('a'), 0)
+  const version = await revision(a)
+  f.transport.transact = async () => { throw Object.assign(new Error('Denied'), { code: 'permission-denied' }) }
+  await assert.rejects(a.reorderTasks(date, ['a'], version), { code: 'permission-denied' })
+  f.transport.transact = async () => {
+    f.db.get('users/alice/lifecycle/state').revision++
+    throw Object.assign(new Error('Denied after a concurrent commit'), { code: 'permission-denied' })
+  }
+  await assert.rejects(a.reorderTasks(date, ['a'], version), { code: 'taskly/conflict' })
 })
