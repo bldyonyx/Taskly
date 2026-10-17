@@ -52,6 +52,7 @@ import {
 import { applySavedTheme } from './js/ui/themes.js'
 import { getAccessibleDateLabel, getDateKey, parseDateKey, renderDate } from './js/utils/date.js'
 import { prepareLocalData } from './js/ui/backupControls.js'
+import { authSession } from './js/auth/index.js'
 
 if (!prepareLocalData()) throw new Error('Taskly startup paused for data recovery.')
 applySavedTheme()
@@ -88,6 +89,8 @@ let isFinishingDay = false
 let isDeletingAllTasks = false
 let isDraggingTask = false
 let didDragTask = false
+
+void authSession.start()
 
 function render(animation = {}) {
   renderTasks(tasks, elements, {

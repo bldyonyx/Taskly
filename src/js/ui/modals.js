@@ -16,6 +16,7 @@ import { getAccessibleDateLabel, getDateKey, getMonthLabel } from '../utils/date
 import { makeIcon } from './icons.js'
 import { selectTheme, loadThemeId, themes } from './themes.js'
 import { createBackupSection } from './backupControls.js'
+import { createAccountSection } from './account.js'
 
 export function renderCurrentListLabel(element, currentList, hasUnsavedChanges) {
   if (!currentList) {
@@ -704,8 +705,17 @@ export function openFinishDayDialog({ dateLabel = 'this day', onConfirm, onCance
   cancelButton.focus()
 }
 
-export function openSettingsPanel() {
-  const modal = createModal('Settings', { className: 'settings-dialog' })
+export function openSettingsPanel({ session } = {}) {
+  const account = createAccountSection(session)
+  const opener = document.activeElement
+  const modal = createModal('Settings', {
+    className: 'settings-dialog',
+    trapFocus: true,
+    onClose() {
+      account.dispose()
+      opener?.focus()
+    },
+  })
   const panel = document.createElement('div')
   panel.className = 'settings-panel'
 
@@ -713,9 +723,10 @@ export function openSettingsPanel() {
   const storageRow = createSettingsRow('Storage', 'This browser')
   const themeSection = createThemeSection()
 
-  panel.append(motionRow, storageRow, themeSection, createBackupSection())
+  panel.append(motionRow, storageRow, account.section, themeSection, createBackupSection())
   modal.content.append(panel)
   modal.show()
+  panel.closest('.taskly-dialog').querySelector('button')?.focus()
 }
 
 export function openDeleteAllTasksDialog({ onConfirm }) {
@@ -887,7 +898,7 @@ function parseDateKeyForCalendar(dateKey) {
   return new Date(year, month - 1, day)
 }
 
-function createModal(titleText, options = {}) {
+export function createModal(titleText, options = {}) {
   const overlay = document.createElement('div')
   overlay.className = 'taskly-modal'
   overlay.setAttribute('role', 'presentation')
@@ -931,6 +942,19 @@ function createModal(titleText, options = {}) {
   }
 
   function handleKeydown(event) {
+    if (options.trapFocus && event.key === 'Tab') {
+      const focusable = [...dialog.querySelectorAll('button, input, [tabindex="0"], a[href]')]
+        .filter((element) => !element.disabled && element.getClientRects().length > 0)
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (event.shiftKey && (document.activeElement === first || !focusable.includes(document.activeElement))) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && (document.activeElement === last || !focusable.includes(document.activeElement))) {
+        event.preventDefault()
+        first?.focus()
+      }
+    }
     if (event.key === 'Escape') {
       close()
     }
