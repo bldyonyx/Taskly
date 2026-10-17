@@ -62,7 +62,9 @@ import {
 } from './js/ui/modals.js'
 import { applySavedTheme } from './js/ui/themes.js'
 import { getAccessibleDateLabel, getDateKey, parseDateKey, renderDate } from './js/utils/date.js'
+import { prepareLocalData } from './js/ui/backupControls.js'
 
+if (!prepareLocalData()) throw new Error('Taskly startup paused for data recovery.')
 applySavedTheme()
 
 const elements = {
@@ -557,7 +559,9 @@ elements.form.addEventListener('submit', (event) => {
 elements.uncheckButton.addEventListener('click', uncheckAll)
 elements.deleteAllButton.addEventListener('click', requestDeleteAllTasks)
 elements.finishButton.addEventListener('click', requestFinishDay)
-elements.settingsButton.addEventListener('click', openSettingsPanel)
+elements.settingsButton.addEventListener('click', () => {
+  if (!isFinishingDay && !isDeletingAllTasks && !isDraggingTask) openSettingsPanel()
+})
 elements.dateCard.addEventListener('click', openCalendar)
 elements.dateCard.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' || event.key === ' ') {

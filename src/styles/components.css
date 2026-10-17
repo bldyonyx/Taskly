@@ -1000,6 +1000,11 @@ h1 {
   gap: 10px;
 }
 
+.settings-dialog {
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+}
+
 .calendar-panel {
   display: grid;
   gap: 12px;

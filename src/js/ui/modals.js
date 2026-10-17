@@ -15,6 +15,7 @@ import { animateModalClose, animateModalOpen } from '../animations/animations.js
 import { getAccessibleDateLabel, getDateKey, getMonthLabel } from '../utils/date.js'
 import { makeIcon } from './icons.js'
 import { applyTheme, loadThemeId, themes } from './themes.js'
+import { createBackupSection } from './backupControls.js'
 
 export function renderCurrentListLabel(element, currentList, hasUnsavedChanges) {
   if (!currentList) {
@@ -704,7 +705,7 @@ export function openFinishDayDialog({ dateLabel = 'this day', onConfirm, onCance
 }
 
 export function openSettingsPanel() {
-  const modal = createModal('Settings')
+  const modal = createModal('Settings', { className: 'settings-dialog' })
   const panel = document.createElement('div')
   panel.className = 'settings-panel'
 
@@ -712,7 +713,7 @@ export function openSettingsPanel() {
   const storageRow = createSettingsRow('Storage', 'This browser')
   const themeSection = createThemeSection()
 
-  panel.append(motionRow, storageRow, themeSection)
+  panel.append(motionRow, storageRow, themeSection, createBackupSection())
   modal.content.append(panel)
   modal.show()
 }
@@ -893,6 +894,7 @@ function createModal(titleText, options = {}) {
 
   const dialog = document.createElement('section')
   dialog.className = 'taskly-dialog chunky-panel'
+  if (options.className) dialog.classList.add(options.className)
   dialog.setAttribute('role', 'dialog')
   dialog.setAttribute('aria-modal', 'true')
   dialog.setAttribute('aria-labelledby', 'taskly-dialog-title')
