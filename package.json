@@ -11,6 +11,7 @@
     "emulators:cloud-test": "firebase emulators:start --config firebase.isolated.json --only auth,firestore --project demo-taskly-isolated",
     "test:cloud-ui": "firebase emulators:exec --config firebase.isolated.json --only auth,firestore --project demo-taskly-isolated \"node scripts/cloud-ui.mjs\"",
     "build": "vite build",
+    "deploy:firebase": "node scripts/firebase-deploy.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {

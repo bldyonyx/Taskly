@@ -23,9 +23,18 @@ import { openSettingsPanel, openCalendarDialog, openSavedListsDialog, openSaveLi
 
 const guard = { enabled: typeof __TASKLY_ISOLATED_CLOUD__ !== 'undefined' && __TASKLY_ISOLATED_CLOUD__,
   dev: import.meta.env.DEV, mode: import.meta.env.MODE, hostname: location.hostname }
-assertIsolatedRuntime(guard)
-const { createIsolatedRuntime } = await import('./firebase.js')
-const runtime = await createIsolatedRuntime(guard)
+let runtime
+try {
+  assertIsolatedRuntime(guard)
+  const { createIsolatedRuntime } = await import('./firebase.js')
+  runtime = await createIsolatedRuntime(guard)
+} catch (error) {
+  const failure = document.createElement('p')
+  failure.setAttribute('role', 'alert')
+  failure.textContent = 'ISOLATED TEST startup failed. Check the fixed loopback emulator configuration; no live Firebase fallback is available.'
+  document.body.replaceChildren(failure)
+  throw error
+}
 const today = getDateKey()
 const controller = createIsolatedController({ session: runtime.session, createAccount: runtime.account,
   readGuest() {

@@ -1,5 +1,11 @@
 # Phase 4.4: isolated cloud UI testing
 
+Phase 4.6 adds environment and CLI safeguards; see the current
+[local Firebase developer guide](firebase-local-safety.md). Normal development
+now defaults to guest-only and requires explicit opt-in for production Auth.
+Emulator signup/login/reset require synthetic `@example.test` addresses.
+The remaining Phase 4.4 text describes the original isolation workflow/history.
+
 Production synchronization is still disabled. The normal `src/main.js`, Auth
 bootstrap, seven guest keys, storage recovery and production cloud flag are
 unchanged. No real account or production data was used. No rules or application

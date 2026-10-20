@@ -1,10 +1,22 @@
 import { defineConfig } from "vite";
 
 export default defineConfig(({ mode, command }) => {
+  if (!['development', 'production', 'github', 'cloud-test'].includes(mode)) {
+    throw new Error('Unsupported Taskly mode. Staging is inactive; use development, production, github or cloud-test.')
+  }
   const isolated = command === 'serve' && mode === 'cloud-test'
   return {
     base: mode === 'github' ? '/Taskly/' : '/',
     define: { __TASKLY_ISOLATED_CLOUD__: JSON.stringify(isolated) },
+    plugins: [{ name: 'taskly-build-boundary',
+      generateBundle() {
+        for (const id of this.getModuleIds()) {
+          if (/\/(?:src\/(?:isolated|staging)|scripts\/staging-contract)(?:\/|\.)/.test(id.replaceAll('\\', '/'))) {
+            this.error('Isolated or staging runtime entered a normal build.')
+          }
+        }
+      },
+    }],
     ...(isolated ? {
       // Do not expose ordinary VITE_FIREBASE_* values from .env.local here.
       envPrefix: 'TASKLY_ISOLATED_',

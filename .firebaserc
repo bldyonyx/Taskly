@@ -1,5 +1,5 @@
 {
   "projects": {
-    "default": "taskly-maya"
+    "production": "taskly-maya"
   }
 }

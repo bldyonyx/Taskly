@@ -1,23 +1,8 @@
-import { getAuth } from 'firebase/auth'
-import { getFirestore, doc, collection, getDocFromServer, getDocsFromServer, runTransaction, onSnapshot } from 'firebase/firestore'
-import { createFirestoreRepository } from './repository.js'
+import { doc, collection, getDocFromServer, getDocsFromServer, runTransaction, onSnapshot } from 'firebase/firestore'
 
-// Not imported by the running app. Future callers must explicitly supply the
-// existing initialized Firebase App and the resolved Auth session controller.
-export async function createFirebaseFirestoreRepository({ app, session }) {
-  if (!app) throw new Error('An existing initialized Firebase App is required.')
-  const auth = getAuth(app)
-  await auth.authStateReady()
-  const state = session.getState()
-  const uid = state.user?.uid
-  const check = () => {
-    if (!uid || auth.currentUser?.uid !== uid) throw new Error('Firebase Auth does not match the requested account.')
-  }
-  check()
-  // Database initialization is deferred until an explicit operation, not factory
-  // construction. Default memory cache only; no persistent disk cache is enabled.
-  const database = () => { check(); return getFirestore(app) }
-  return createFirestoreRepository({ uid, session, transport: createFirestoreTransport({ database, check }) })
+// No remote repository can be activated by a caller or feature flag.
+export async function createFirebaseFirestoreRepository() {
+  throw new Error('Remote Firestore repositories are disabled pending reviewed activation.')
 }
 
 // Injectable database resolver also lets emulator tests exercise the real SDK

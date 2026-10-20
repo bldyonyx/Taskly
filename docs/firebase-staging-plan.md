@@ -1,4 +1,50 @@
-# Taskly Phase 4.5 — Firebase staging audit and plan
+# Taskly Phase 4.6 — local safeguards and staging plan
+
+## Current status — 2026-10-20
+
+Phase 4.6 implements local safeguards only. **NO-GO for live staging access or
+writes remains in force.** See [the developer guide](firebase-local-safety.md) for
+the authoritative mode matrix, environment contract and commands. The Phase 4.5
+audit below is retained as historical evidence; statements there that environment
+guards are only proposed, that development automatically uses production Auth, or
+that `.firebaserc` has a production default are superseded by this section.
+
+- Development defaults to local guest use. Deliberate production Auth requires
+  both explicit production identity and the local Auth opt-in. Production/github
+  builds retain optional production Auth, validated before SDK initialization;
+  the existing default app must match all four web options. No Firestore is wired
+  into normal startup. The dormant remote repository factory now always refuses.
+- Emulator configuration is fixed, explicitly identified and validated before
+  initialization; both loopback connections precede operations. Startup config
+  errors are visible, and emulator account actions require `@example.test` emails.
+- Unknown/custom/staging modes fail at Vite configuration. Every build uses the
+  normal entry, and cloud-test builds disable Auth. A bundler graph guard and
+  artifact scanner reject isolated/staging code in normal release artifacts.
+- Tooling-only `scripts/staging-contract.mjs` specifies explicit staging identity,
+  a consistent dedicated web tuple and a source-pinned project. The approved
+  project is currently null, activation always refuses and writes remain false.
+  No live staging SDK initializer or entry point exists.
+- `.firebaserc` retains the production alias but removes its default. The Hosting
+  deployment wrapper requires literal project, Hosting scope and a second literal
+  production confirmation. Staging/rules/ambiguous deployments are refused by the
+  wrapper. Pages CI and Hosting configuration are unchanged; no deployment ran.
+
+Read-only local inspection found that the parsed `.env.local` project ID has a
+trailing double quote. The guard rejects it; **manual quoting correction is
+required before production Auth can work in this checkout**. No environment or
+credential value was rewritten. Valid production Auth remains supported and was
+verified with mocks; no real production login was performed.
+
+Validation evidence is recorded below after the Phase 4.5 history. Remaining
+blockers still include approved project/web tuple and tester admission, pending
+adversarial rules/bounds/UI cases, isolated staging runtime, scoped IAM and
+separate approvals for provisioning, remote Auth/configuration, rules/Hosting and
+bounded synthetic writes. Existing integrity, concurrency, historical-data and
+deletion limits in this plan are not resolved by configuration guards. The next
+step is to review this local diff and complete the pending emulator matrix and
+admission design before seeking project-creation approval.
+
+## Historical Phase 4.5 audit
 
 Audit date: 2026-10-20 (Europe/Zurich). Status: planning complete; **NO-GO for real staging writes today**. Everything below described as proposed is future work, not an implemented safeguard or authorization.
 
@@ -242,3 +288,41 @@ For corruption/orphans: stop initialization and mutations; do not rebuild the ma
 **NO-GO:** any production routing, wrong/mixed config, unapproved billing/deployment/write, open database rules, unsupported adoption/import, unexplained integrity/rules failures, stale-context publication, missing revision protection for aggregate UI intent, or incomplete test evidence. Today real staging writes remain NO-GO because the staging runtime/guards/admission and new validation matrix are not implemented.
 
 **Production synchronization remains disabled.** Staging signoff does not authorize production access, rules deployment, synchronization or migration. A separate production proposal must resolve/explicitly approve the bounded-account policy, historical-data reconciliation, deletion/recovery policy and supported feature scope before checkpoint D.
+
+## Phase 4.6 validation — 2026-10-20
+
+| Check | Actual result |
+| --- | --- |
+| `npm.cmd test` | **75/75 passed**, 0 failed/skipped. Includes configuration, mocked production Auth, invalid emulator zero-initialization/zero-fetch, inactive staging, module-graph and pure deployment-plan checks; existing storage/backup/lifecycle tests pass. |
+| `firebase.cmd emulators:exec --config firebase.json --only firestore --project demo-taskly-rules "npm run test:rules"` | **15/15 passed**, exit 0, local Firestore at 127.0.0.1:8080. Expected rules denials are intentional test cases. |
+| Same emulator command using `firebase.isolated.json` | Could not start because 8085 was already occupied. Existing processes were not stopped; successful rules run used the standard local port above. |
+| `npm.cmd run build -- --outDir .firebase/phase46-normal-build` | Passed. |
+| `npm.cmd run build -- --mode cloud-test --outDir .firebase/phase46-cloud-test-build` | Passed; normal entry and disabled Auth. |
+| `npm.cmd run build -- --mode github --outDir .firebase/phase46-github-build` | Passed; existing Pages base preserved. |
+| `node scripts/check-isolated-build.mjs` against each of those three output directories | **4/4 text artifacts passed per build**; no isolated/staging markers. All three builds also passed the actual module-graph guard. |
+| `node scripts/check-local-browser.mjs` | Passed with installed Chromium and disposable profile: normal development startup, Settings and reload; **0 Firebase requests, 0 runtime exceptions**, seven guest raw values unchanged. External font requests were blocked before transmission. Report: `.firebase/local-safety-1792525487529/report.json`. |
+| Full `scripts/cloud-ui.mjs` with the existing verified demo emulator endpoints | Could not start because strict Vite port 5174 was already occupied. Full Phase 4.4 UI workflows were **not rerun**; the separate normal-startup browser check above passed. |
+| `node scripts/firebase-deploy.mjs --project staging` | Expected exit **1**, refused before CLI invocation; no deployment ran. Exact approved Hosting argument plan is tested without executing it. |
+| Existing `.env.local` read-only production validation | Expected refusal: parsed project has a trailing quote. Manual correction required; no values changed. |
+| `git diff --check` | Passed. |
+
+Builds retain the existing >500 kB JavaScript chunk warning. The Firebase CLI
+initially required access outside the sandbox to its local configstore; only
+demo-project emulator commands ran with that access. Browser execution also used
+local permission escalation. Initial browser harness attempts encountered a
+locked watched profile, unavailable sandbox browser connection, and a source-file
+false positive in the request classifier; the final run above passed after the
+harness corrections. No additional dependencies were installed.
+
+Changed files: `.env.example`, `.firebaserc`, `package.json`, `vite.config.js`,
+`src/js/auth/{environment,firebase,index}.js`, `src/js/firestore/firebase.js`,
+`src/isolated/{config,firebase,main}.js`, `scripts/{firebase-deploy,staging-contract,
+check-local-browser,check-isolated-build}.mjs`, `tests/environment.test.js`,
+`docs/{firebase-local-safety,firebase-staging-plan,isolated-cloud-testing}.md`.
+`firebase.json`, `firebase.isolated.json`, Pages CI, Firestore rules, seven guest
+keys, actual `.env.local`/credentials and all user data remain unchanged.
+
+No production/staging Firestore or remote deployment was accessed. No real
+Firebase accounts or project were created, no synchronization was enabled, no
+user data was migrated/uploaded/deleted, and no commit or push was made. Local
+emulator data changes were limited to the synthetic demo rules suite.
