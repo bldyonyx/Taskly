@@ -98,6 +98,16 @@ test('guests and another account cannot read, write or delete any planned docume
     await denied(getDoc(ref(client, path)))
     await denied(setDoc(ref(client, path), data))
     await denied(deleteDoc(ref(client, path)))
+    // Bypass the helper's preliminary manifest read: exercise write authorization
+    // itself rather than letting a denied read mask a write-rule regression.
+    await denied(rawSetDoc(ref(client, path), data))
+    await denied(rawDeleteDoc(ref(client, path)))
+  }
+  const manifest = (await getDoc(ref('alice', 'lifecycle/state'))).data()
+  for (const client of ['guest', 'bob']) {
+    await denied(getDoc(ref(client, 'lifecycle/state')))
+    await denied(rawSetDoc(ref(client, 'lifecycle/state'), { ...manifest, revision: manifest.revision + 1 }))
+    await denied(rawDeleteDoc(ref(client, 'lifecycle/state')))
   }
 })
 
@@ -212,6 +222,270 @@ function accountClient(client = 'alice', uid = 'alice', transportOverride) {
     logout() { state = { phase: 'guest', user: null }; for (const fn of [...listeners]) fn(state) } }
 }
 const rev = async (account) => (await account.loadAccount()).revision
+
+// Fresh UID per adversarial/boundary case: intentional same-owner corruption
+// must not contaminate subsequent lifecycle tests. All clients use loopback.
+let isolatedId = 0
+async function freshCase() {
+  const uid = `phase47-${++isolatedId}`
+  const app = initializeApp({ projectId, apiKey: 'emulator-only', appId: uid }, uid)
+  const database = initializeFirestore(app, {})
+  connectFirestoreEmulator(database, hostname, Number(port), { mockUserToken: { sub: uid, user_id: uid } })
+  clients.set(uid, { app, db: database })
+  const context = accountClient(uid, uid)
+  await context.account.initializeEmptyAccount({ confirmedEmpty: true })
+  return { ...context, uid, db: database, ref: (path) => ref(uid, path, uid) }
+}
+const taskSet = (count, prefix = 't') => Array.from({ length: count }, (_, i) =>
+  ({ id: `${prefix}${i}`, text: `Task ${i}`, completed: i % 2 === 0 }))
+const listSet = (count, prefix = 't') => ({ id: 'boundary', name: 'Boundary', createdAt: 'original',
+  updatedAt: 'original', order: 0, tasks: taskSet(count, prefix) })
+async function rawMutation(context, parents, changes = [], revisionDelta = 1) {
+  const index = (await getDoc(context.ref('lifecycle/state'))).data()
+  const batch = writeBatch(context.db)
+  batch.set(context.ref('lifecycle/state'), { ...index, revision: index.revision + revisionDelta, parents })
+  for (const [path, data] of changes) {
+    if (data === null) batch.delete(context.ref(path))
+    else batch.set(context.ref(path), data)
+  }
+  return batch.commit()
+}
+
+test('adversarial stale/missing revision, forged manifest, and wrong task order roll back every write', async () => {
+  const c = await freshCase()
+  await c.account.replaceDatedTasks('2026-11-01', taskSet(2), null, 0)
+  const index = (await getDoc(c.ref('lifecycle/state'))).data()
+  const original = (await getDoc(c.ref('days/2026-11-01/tasks/t0'))).data()
+  for (const delta of [0, -1, 2]) await denied(rawMutation(c, index.parents,
+    [['days/2026-11-01/tasks/t0', { ...original, text: 'Rejected' }]], delta))
+  for (const patch of [{ ownerId: 'bob' }, { parents: [] }, { revision: 1.5 }, { extra: true }]) {
+    await denied(rawSetDoc(c.ref('lifecycle/state'), { ...index, revision: index.revision + 1, ...patch }))
+  }
+  const missing = { ...index }; delete missing.revision
+  await denied(rawSetDoc(c.ref('lifecycle/state'), missing))
+  await denied(rawMutation(c, index.parents, [['days/2026-11-01/tasks/t0', { ...original, order: 1 }]]))
+  await denied(rawUpdateDoc(c.ref('days/2026-11-01/tasks/t0'), { text: 'No revision' }))
+  await denied(rawSetDoc(c.ref('lifecycle/other'), index))
+  assert.deepEqual((await getDoc(c.ref('lifecycle/state'))).data(), index)
+  assert.deepEqual((await getDoc(c.ref('days/2026-11-01/tasks/t0'))).data(), original)
+  c.account.dispose()
+})
+
+test('indexed child without physical parent, malformed date shapes, and arbitrary nesting are denied', async () => {
+  const c = await freshCase()
+  const full = (data) => ({ schemaVersion: 1, ownerId: c.uid, ...data })
+  await denied(rawMutation(c, { 'savedLists/absent': ['t0'] }, [
+    ['savedLists/absent/tasks/t0', full({ ...taskSet(1)[0], order: 0 })],
+  ]))
+  for (const dateKey of ['2026-13-01', '2026-00-01', '2026-01-32', '2026-1-01', 'not-a-date']) {
+    await denied(rawMutation(c, { [`days/${dateKey}`]: [] }, [
+      [`days/${dateKey}`, full({ dateKey, currentListId: null })],
+    ]))
+  }
+  for (const path of ['savedLists/a/tasks/t/children/c', 'lifecycle/state/children/c']) {
+    await denied(rawSetDoc(c.ref(path), full({})))
+  }
+  assert.equal(await rev(c.account), 0)
+  c.account.dispose()
+})
+
+// These are vulnerability regression probes, NOT desired security guarantees.
+// Assert actual acceptance so a rules fix forces review of the documented gap.
+test('KNOWN GAP: owner can forge manifest entries, duplicate membership and exceed the client document bound', async () => {
+  const c = await freshCase()
+  for (const parents of [{ arbitrary: 7 }, { 'savedLists/absent': ['same', 'same'] },
+    { 'savedLists/absent': Array.from({ length: 350 }, (_, i) => `t${i}`) }]) {
+    await rawMutation(c, parents)
+    assert.deepEqual((await getDoc(c.ref('lifecycle/state'))).data().parents, parents)
+    await assert.rejects(c.account.loadAccount())
+  }
+  c.account.dispose()
+})
+
+test('KNOWN GAP: manifest-only reorder and parent deletion can leave unchanged or orphaned children', async () => {
+  const c = await freshCase()
+  await c.account.replaceDatedTasks('2026-11-01', taskSet(2), null, 0)
+  await rawMutation(c, { 'days/2026-11-01': ['t1', 't0'] })
+  assert.equal((await getDoc(c.ref('days/2026-11-01/tasks/t0'))).data().order, 0)
+  await assert.rejects(c.account.loadAccount(), { code: 'taskly/integrity' })
+  await rawMutation(c, {}, [['days/2026-11-01', null]])
+  assert.equal((await getDoc(c.ref('days/2026-11-01/tasks/t0'))).exists(), true)
+  // A valid empty manifest cannot reveal orphaned documents.
+  assert.deepEqual((await c.account.loadAccount()).aggregates, {})
+  c.account.dispose()
+})
+
+test('KNOWN GAP: impossible calendar day, dangling list reference and inconsistent finished counts are accepted', async () => {
+  const c = await freshCase()
+  const full = (data) => ({ schemaVersion: 1, ownerId: c.uid, ...data })
+  await rawMutation(c, { 'days/2026-02-30': [] }, [
+    ['days/2026-02-30', full({ dateKey: '2026-02-30', currentListId: null })],
+  ])
+  assert.equal((await getDoc(c.ref('days/2026-02-30'))).exists(), true)
+  await assert.rejects(c.account.loadAccount())
+  await rawMutation(c, { 'days/2026-11-01': [], 'finishedDays/bad': [] }, [
+    ['days/2026-11-01', full({ dateKey: '2026-11-01', currentListId: 'absent' })],
+    ['finishedDays/bad', full({ id: 'bad', dateKey: '2026-11-01', date: 'arbitrary', createdAt: 'time',
+      totalCount: 5, completedCount: 5, order: 0 })],
+  ])
+  await assert.rejects(c.account.loadAccount(), { code: 'taskly/integrity' })
+  c.account.dispose()
+})
+
+test('350 indexed documents: large Saved List create/replace/cascade succeed, 351 rejects intact', async () => {
+  const c = await freshCase()
+  await c.account.saveList(listSet(348)) // manifest + parent + 348 children
+  assert.equal((await c.account.loadSavedLists())[0].tasks.length, 348)
+  const version = await rev(c.account)
+  await assert.rejects(c.account.saveList({ ...listSet(0), id: 'overflow' }), /bounded lifecycle limit/)
+  assert.equal(await rev(c.account), version)
+  await c.account.replaceSavedList({ ...listSet(348), name: 'Replaced' }, version)
+  assert.equal((await c.account.loadSavedLists())[0].name, 'Replaced')
+  await c.account.deleteSavedList('boundary', await rev(c.account))
+  assert.equal((await getDocs(collection(c.db, `users/${c.uid}/savedLists/boundary/tasks`))).size, 0)
+  assert.deepEqual((await c.account.loadAccount()).aggregates, {})
+  c.account.dispose()
+})
+
+test('400 document union succeeds and 401 rejects snapshot replacement without partial changes', async () => {
+  const c = await freshCase()
+  await c.account.saveList(listSet(199, 'old'))
+  await c.account.replaceSavedList(listSet(199, 'new'), await rev(c.account)) // 1+1+199+199 = 400
+  const before = await c.account.loadSavedLists()
+  const version = await rev(c.account)
+  await assert.rejects(c.account.replaceSavedList(listSet(200, 'third'), version), /safe transaction limit/)
+  assert.deepEqual(await c.account.loadSavedLists(), before)
+  assert.equal(await rev(c.account), version)
+  assert.equal((await getDocs(collection(c.db, `users/${c.uid}/savedLists/boundary/tasks`))).size, 199)
+  c.account.dispose()
+})
+
+test('large Finished Day create/cascade and numerous shallow collections reach 350 indexed documents', async () => {
+  const c = await freshCase()
+  await c.account.createFinishedDay({ id: 'large', dateKey: '2026-11-01', date: '2026-11-01', createdAt: 'time',
+    order: 0, tasks: taskSet(348), totalCount: 348, completedCount: 174 })
+  assert.equal((await c.account.loadFinishedDays())[0].totalCount, 348)
+  await c.account.deleteFinishedDay('large', await rev(c.account))
+  assert.equal((await getDocs(collection(c.db, `users/${c.uid}/finishedDays/large/tasks`))).size, 0)
+  // Seed a valid client-compatible account through owner rules, not Admin bypass.
+  const parents = {}; const changes = []
+  for (let i = 0; i < 174; i++) {
+    const parent = `savedLists/p${i}`; parents[parent] = ['t0']
+    const { tasks, ...metadata } = { ...listSet(1), id: `p${i}` }
+    changes.push([parent, { ...metadata, schemaVersion: 1, ownerId: c.uid }],
+      [`${parent}/tasks/t0`, { ...tasks[0], order: 0, schemaVersion: 1, ownerId: c.uid }])
+  }
+  parents['savedLists/empty'] = []
+  const { tasks, ...empty } = { ...listSet(0), id: 'empty' }
+  changes.push(['savedLists/empty', { ...empty, schemaVersion: 1, ownerId: c.uid }])
+  await rawMutation(c, parents, changes)
+  assert.equal((await c.account.loadSavedLists()).length, 175)
+  await assert.rejects(c.account.saveList({ ...listSet(0), id: 'too-many' }), /bounded lifecycle limit/)
+  assert.equal((await c.account.loadSavedLists()).length, 175)
+  c.account.dispose()
+})
+
+test('atomic Finish Day union boundary: 198 tasks succeed at 399 paths, 199 reject at 401 intact', async () => {
+  const c = await freshCase()
+  const dateKey = '2026-11-01'
+  await c.account.replaceDatedTasks(dateKey, taskSet(199), null, 0)
+  const version = await rev(c.account)
+  const metadata = { id: 'boundary-finish', createdAt: 'time', order: 0 }
+  await assert.rejects(c.account.finishDay(dateKey, metadata, version), /safe transaction limit/)
+  assert.equal(await rev(c.account), version)
+  assert.equal((await c.account.loadTasks(dateKey)).length, 199)
+  assert.equal((await getDoc(c.ref('finishedDays/boundary-finish'))).exists(), false)
+  assert.equal((await getDocs(collection(c.db, `users/${c.uid}/finishedDays/boundary-finish/tasks`))).size, 0)
+  await c.account.replaceDatedTasks(dateKey, taskSet(198), null, version)
+  await c.account.finishDay(dateKey, metadata, await rev(c.account))
+  assert.equal((await c.account.loadFinishedDays())[0].tasks.length, 198)
+  assert.deepEqual(await c.account.loadTasks(dateKey), [])
+  c.account.dispose()
+})
+
+test('same-task edits, Saved List replacement and simultaneous Finish Day each have one revision winner', async () => {
+  const c = await freshCase()
+  // Separate Firebase app/transport, same authenticated UID.
+  const app = initializeApp({ projectId, apiKey: 'emulator-only', appId: 'second' }, `${c.uid}-second`)
+  const database = initializeFirestore(app, {})
+  connectFirestoreEmulator(database, hostname, Number(port), { mockUserToken: { sub: c.uid, user_id: c.uid } })
+  clients.set(`${c.uid}-second`, { app, db: database })
+  const second = accountClient(`${c.uid}-second`, c.uid)
+  const a = c.account; const b = second.account
+  await a.replaceDatedTasks('2026-11-01', taskSet(2), null, 0)
+  const race = async (operations) => {
+    const version = await rev(a)
+    const results = await Promise.allSettled(operations.map((operation) => operation(version)))
+    assert.equal(results.filter(({ status }) => status === 'fulfilled').length, 1)
+    assert.equal(results.find(({ status }) => status === 'rejected').reason.code, 'taskly/conflict')
+    assert.equal(await rev(a), version + 1)
+  }
+  await race([(r) => a.editTask('2026-11-01', 't0', 'A', r), (r) => b.editTask('2026-11-01', 't0', 'B', r)])
+  assert.ok(['A', 'B'].includes((await a.loadTasks('2026-11-01'))[0].text))
+  for (let i = 0; i < 12; i++) {
+    await a.reorderTasks('2026-11-01', i % 2 ? ['t0', 't1'] : ['t1', 't0'], await rev(a))
+  }
+  assert.deepEqual((await a.loadTasks('2026-11-01')).map(({ id, order }) => [id, order]), [['t0', 0], ['t1', 1]])
+  await a.saveList(listSet(2))
+  await race([(r) => a.replaceSavedList(listSet(3, 'a'), r), (r) => b.replaceSavedList(listSet(4, 'b'), r)])
+  const saved = (await a.loadSavedLists())[0]
+  assert.ok(saved.tasks.every(({ id }) => id.startsWith(saved.tasks.length === 3 ? 'a' : 'b')))
+  await race([(r) => a.finishDay('2026-11-01', { id: 'finish-a', createdAt: 'time', order: 0 }, r),
+    (r) => b.finishDay('2026-11-01', { id: 'finish-b', createdAt: 'time', order: 0 }, r)])
+  assert.equal((await a.loadFinishedDays()).length, 1)
+  assert.deepEqual(await a.loadTasks('2026-11-01'), [])
+  a.dispose(); b.dispose()
+})
+
+test('interrupted pre-submit operation retries once; lost acknowledgment requires reload and blocks duplicate finish', async () => {
+  const c = await freshCase()
+  await c.account.replaceDatedTasks('2026-11-01', taskSet(2), null, 0)
+  const version = await rev(c.account)
+  const metadata = { id: 'uncertain', createdAt: 'time', order: 0 }
+  const interrupted = accountClient(c.uid, c.uid, (transport) => ({ ...transport,
+    async transact() { throw new Error('Interrupted before submission') },
+  }))
+  await assert.rejects(interrupted.account.finishDay('2026-11-01', metadata, version), /Interrupted/)
+  assert.equal(await rev(c.account), version)
+  assert.equal((await c.account.loadTasks('2026-11-01')).length, 2)
+  // Inject only after a mutation; finishDay first reads a transactional view.
+  let submitted = 0
+  const late = accountClient(c.uid, c.uid, (transport) => ({ ...transport,
+    async transact(paths, plan) {
+      let mutated = false
+      await transport.transact(paths, (values) => {
+        const changes = plan(values); mutated = changes.length > 0; return changes
+      })
+      if (mutated) { submitted++; throw new Error('Lost acknowledgment') }
+    },
+  }))
+  await assert.rejects(late.account.finishDay('2026-11-01', metadata, version), /Lost acknowledgment/)
+  assert.equal(submitted, 1)
+  assert.equal(await rev(c.account), version + 1)
+  assert.equal((await c.account.loadFinishedDays()).length, 1)
+  await assert.rejects(c.account.finishDay('2026-11-01', metadata, version), { code: 'taskly/conflict' })
+  assert.deepEqual(await c.account.loadTasks('2026-11-01'), [])
+  c.account.dispose(); interrupted.account.dispose(); late.account.dispose()
+})
+
+test('account switch during a real pending commit suppresses success while preserving original UID scope', async () => {
+  const c = await freshCase()
+  await c.account.saveList(listSet(2))
+  let signalCommitted, release
+  const committed = new Promise((resolve) => { signalCommitted = resolve })
+  const held = new Promise((resolve) => { release = resolve })
+  const pending = accountClient(c.uid, c.uid, (transport) => ({ ...transport,
+    async transact(...args) { await transport.transact(...args); signalCommitted(); await held },
+  }))
+  const writing = pending.account.replaceSavedList(listSet(3, 'replacement'), await rev(c.account))
+  await committed
+  pending.logout() // Invalidates permanently, as switching to another UID does.
+  release()
+  await assert.rejects(writing, /session has changed/)
+  assert.equal((await c.account.loadSavedLists())[0].tasks.length, 3)
+  await denied(getDoc(doc(clients.get('bob').db, `users/${c.uid}/savedLists/boundary`)))
+  c.account.dispose(); pending.account.dispose()
+})
 
 test('two independent devices racing to reorder have one winner and no stale silent overwrite', async () => {
   const a = accountClient()

@@ -8,6 +8,7 @@ import { validateTransition } from '../src/js/firestore/schema.js'
 import { createFinishedDay, getFinishedDayDateKey, loadFinishedDays } from '../src/js/lists/finishedDays.js'
 import { documents } from './helpers/firestore-fixtures.js'
 import { inspectFinishedDayDates, resolveFinishedDayDates } from '../src/js/data/legacyFinishedDays.js'
+import { validateDocument } from '../src/js/firestore/schema.js'
 
 function fixture() {
   let state = { phase: 'guest', user: null, pending: null }
@@ -51,6 +52,28 @@ function fixture() {
 }
 const date = '2026-10-17'
 const task = (id) => ({ id, text: id, completed: false })
+
+test('manifest JSON character boundary accepts exactly 200000 and refuses 200001 without normalization', () => {
+  const manifest = { schemaVersion: 1, ownerId: 'alice', revision: 0, parents: { 'savedLists/large': [] } }
+  const ids = manifest.parents['savedLists/large']
+  for (let i = 0; i < 133; i++) ids.push(`${i}-` + 'x'.repeat(1490))
+  ids.push('z'.repeat(200000 - JSON.stringify(manifest).length - 3))
+  assert.equal(JSON.stringify(manifest).length, 200000)
+  assert.equal(validateDocument('alice', 'lifecycle/state', manifest), manifest)
+  ids[ids.length - 1] += 'z'
+  assert.throws(() => validateDocument('alice', 'lifecycle/state', manifest), /bounded lifecycle limit/)
+  assert.equal(JSON.stringify(manifest).length, 200001)
+})
+
+test('long-ID snapshot rejection leaves existing data and revision intact', async () => {
+  const f = fixture()
+  const a = f.account('alice')
+  await a.createTask(date, task('retained'), 0)
+  const before = structuredClone(f.db)
+  const tasks = Array.from({ length: 134 }, (_, i) => task(`${i}-` + 'x'.repeat(1490)))
+  await assert.rejects(a.saveList({ id: 'large', name: 'Large', createdAt: 'time', updatedAt: 'time', order: 0, tasks }), /bounded lifecycle limit/)
+  assert.deepEqual(f.db, before)
+})
 
 test('boundary isolates guest and accounts, blocks loading/pending, never loads or migrates guest data', () => {
   const f = fixture()

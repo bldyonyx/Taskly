@@ -1,4 +1,260 @@
-# Taskly Phase 4.6 — local safeguards and staging plan
+# Taskly Phase 4.7 — staging readiness and security validation
+
+## Phase 4.7 decision — 2026-10-20
+
+**NO-GO for requesting staging provisioning approval today.** Local validation is
+complete, but passing tests do not resolve the confirmed same-owner integrity
+gaps, approve their acceptance, or supply the project/IAM/admission decision
+record. No project should be provisioned from this report. Staging access/writes
+and production synchronization remain disabled. This section supersedes readiness
+and pending-test statements below; Phase 4.6 and earlier evidence is historical.
+
+Provisioning an empty project with deny-all rules is a distinct, potentially
+approvable checkpoint A; it does not require every application feature to exist.
+Before requesting it, record the intended project ID, region, billing/plan and
+cost owner, scoped operator IAM, initial deny-all procedure, tester admission
+design, cleanup owner, and explicit acceptance or remediation of the findings
+below. These decisions have not been supplied or accepted by this local exercise.
+Runtime/admission implementation and separate configuration, deployment and
+synthetic-write approvals remain prerequisites for checkpoints B/C, rather than
+claims that creating an empty project itself exposes application data.
+
+### Scope and changed files
+
+Inspected all five requested guides, actual lifecycle/account/repository/schema
+and transport implementations, Firestore rules, isolated controller/runtime/UI,
+Auth/environment guards, Vite graph boundary, staging/deployment contracts and
+existing tests before adding coverage. Starting working tree was clean.
+
+- `tests/emulator/firestore.rules.mjs`: 12 new cases, fresh synthetic UIDs for
+  adversarial/boundary cases and independent SDK sessions for concurrency.
+- `tests/account-data.test.js`: two new manifest size/rollback cases.
+- This plan: findings, scope classification, admission proposal and decision.
+
+No application implementation, rules, deployment configuration, guest keys,
+credentials or environment files change. Rules were neither weakened nor
+deployed. Known gaps remain explicitly blocked from remote activation.
+
+### Adversarial results: server guarantees and confirmed gaps
+
+The final **27/27** emulator tests exercise actual `firestore.rules` using SDK
+transactions/batches, not a mock rules evaluator. Denial assertions check
+`permission-denied`. Existing schema tests include a valid lifecycle mutation so
+an unrelated missing revision does not mask their field checks. Three new
+`KNOWN GAP` tests assert **acceptance** of malicious same-owner writes: they pass
+because they reproduce a vulnerability, not because those writes are safe.
+
+| Case | Actual enforcement / observed result |
+| --- | --- |
+| Cross-UID and unauthenticated document/collection reads, writes, deletes; nested tasks | Rules deny. All existing fixture families, including manifest, are covered. Forged `ownerId` cannot grant another UID access. |
+| Missing/extra fields, forged IDs/version/ownership, malformed task fields and immutable metadata changes | Rules deny; server-rejected multi-document transactions leave valid companion writes and revision unchanged. |
+| Missing revision participation, unchanged/stale/jumped revision, malformed manifest envelope, other lifecycle ID, reset/deletion | Rules deny. Same-owner increments must be exactly one; manifest creation must be empty revision zero. |
+| Task not indexed, wrong order for a written task, indexed task without physical parent | Rules deny. Unknown collections and deeper task subcollections also deny. |
+| Invalid date shape/range (`2026-13-01`, zero month, day 32, unpadded date) | Rules deny. **`2026-02-30` is accepted** by the regex; client calendar validation rejects it. |
+| Manifest map contents / total document count | **Gap:** owner can write `arbitrary: 7`, duplicate task IDs, or 350 IDs under a nonexistent parent. Rules only bound parent map size to 349; they do not enforce the client's 350-document total, key/value schema or JSON character cap. Client rejects the tested malformed/oversized manifests. |
+| Ordering bypass without rewriting tasks | **Gap:** manifest-only reversal succeeds while task orders remain unchanged. Client coherent load rejects the order mismatch. Rule order validation applies only to documents actually written. |
+| Partial cascade | **Gap:** removing manifest membership and deleting a parent without children succeeds. The child remains readable to its owner; a subsequent client load sees an empty index and cannot discover it. No automatic adoption/repair is safe. |
+| Dangling day reference / finished counts | **Gap:** owner can commit a nonexistent `currentListId` and finished metadata claiming five tasks when none exist. Rules accept; client relational verification rejects indexed inconsistent state. Date/timestamp strings are not fully semantically validated by rules. |
+
+Firestore transaction atomicity prevents a rejected commit from partly applying.
+It does not establish that an accepted forged manifest enumerates every real
+document. Client transactions enforce complete **indexed** membership, contiguous
+ordering, references, counts and CAS for supported operations; they cannot prove
+absence of historical or malicious unindexed descendants. Owner-only rules are
+authorization, not tester admission, and are not complete same-owner integrity.
+Preferences/imports have separate rules and do not advance aggregate revisions.
+
+**Hardening proposal, not implemented:** add a server-controlled staging roster
+gate to every allowed owner path, validate real calendar days and required list
+existence, and reject unsupported manifest content where feasible. These local
+checks alone cannot establish exhaustive descendant cleanup or count consistency.
+If arbitrary owner clients must be unable to corrupt aggregates, deny direct
+aggregate/manifest client writes and move lifecycle planning to a trusted bounded
+mutation service with authenticated UID/admission/revision checks. Do not assume
+map-wide rule validation can be bolted onto the present schema at these bounds.
+Such a service changes SDK transaction transport, authorization, deployment and
+retry contracts; a versioned schema/rules rollout also makes older clients
+incompatible. Re-run large transaction and rule-access-budget cases after any
+hardening. No compatibility decision, service or stronger rule is deployed here.
+
+For a trusted synthetic-only pilot the owner may explicitly accept the narrower
+same-owner integrity boundary, with immediate stop/reconciliation on corruption.
+That acceptance is pending; this report does not silently grant it. Broad or
+untrusted tester access requires hardening first.
+
+### Boundary and near-limit results
+
+| Local case | Result and source of threshold |
+| --- | --- |
+| 350 indexed documents | Real SDK creates a Saved List with 348 tasks + parent + manifest, reads it, replaces metadata and cascades all children. Adding a 351st indexed document rejects without changing revision/state. **Client schema design**, not a Firebase platform limit. |
+| Large Finished Days | Real SDK creates/reads/cascades 348-task archive (350 indexed docs), with completed count 174. Descendant collection verified empty after deletion. |
+| Numerous nested collections | Real SDK seeds valid owner-protocol data with 174 one-task lists plus one empty list: 175 task collections/parents, 350 indexed docs. Client load succeeds; another parent rejects intact. Arbitrary deeper collection paths deny; recursive nesting is unsupported. |
+| Replacement union 400 / 401 | 199 old and 199 disjoint new children + parent + manifest = **400 paths**, replacement succeeds. Next disjoint 200-task replacement needs **401**, rejects with original tasks/revision intact. **Repository application guard** on distinct declared read paths, not a claim about Firebase write limits. |
+| Atomic Finish Day | 198 tasks succeed with **399 union paths** (`2N + 3`: manifest, retained day, new archive and both child sets). 199 tasks need 401 and reject; source tasks, revision and absent target/children are verified intact. Final index would fit, but transient union does not. |
+| Repeated ordering | 12 alternating real SDK reorders preserve IDs and contiguous order; separate two-session race has exactly one revision winner. |
+| 200,000 / 200,001 JSON characters | Unit schema test accepts exactly 200,000 and rejects 200,001. Long-ID snapshot rejection preserves the complete existing in-memory repository and revision. **Client JavaScript JSON character policy**, not byte size, rules enforcement or an emulator/platform byte-limit test. |
+
+The 349-parent rules cap is separate from client indexed-document accounting.
+350 includes manifest, parents and tasks; it excludes preferences, imports and
+the user marker. A valid account can still exceed the 400-path union during
+replacement/finishing. Byte size, request limits, transaction timing and rules
+evaluation budgets can cause earlier backend failures. No live Firebase platform
+quota, throughput or latency boundary was tested or inferred from these numbers.
+The successful large emulator writes establish only the tested payload shapes.
+No chunked fallback, partial cleanup or size-limit override was introduced.
+
+### Concurrency, failures and UI confirmation
+
+Independent Firebase app/transport sessions sharing a synthetic UID race with
+the same displayed revision. Same-task edits, competing reorders, two Saved List
+replacements, and simultaneous Finish Day each have exactly one winner and a
+`taskly/conflict` loser. Assertions verify coherent membership/order, one archive,
+empty active tasks and a single revision increment. Existing replacement versus
+cascade and Finish versus edit races remain covered. Explicit stale retries cannot
+overwrite current state or create a duplicate archive.
+
+New failure cases simulate interruption **before submission** (revision/tasks
+unchanged) and loss of acknowledgment **after a real emulator commit** (caller
+rejects, authoritative reload shows one archive, stale retry rejects). These
+faults are injected in the transport wrapper, not a physical process kill or
+packet-loss test. No automatic application retry or idempotency ledger is claimed.
+The safe response to an uncertain result remains reload and inspection of stable
+IDs before deciding on a new intent.
+
+A real replacement commit held before acknowledgment then invalidated by logout
+rejects success publication; the committed data remains under the original UID
+and Bob cannot read it. Logout uses the same permanent repository invalidation
+as a UID switch. Unit/controller tests separately switch to another UID and
+verify the next context receives neither stale data nor a success result.
+Already-submitted commits are not cancelable by switching accounts.
+
+Actual SDK offline transactions reject and recovery does not replay the rejected
+operation. Real browser two-tab stale edits require explicit reload; offline save
+shows failure with no false success/reconnect replay. Real rule denials propagate;
+only a freshly observed changed revision normalizes a denial to a conflict.
+The controller tests check failed/unconfirmed writes never become saved and that
+mutations remain blocked until reload. Browser rapid-switch hydration and exact
+seven-key preservation also pass.
+
+Not executed: physical browser/process termination mid-RPC, real network packet
+loss, prolonged offline sessions, large browser-rendering performance, arbitrary
+multi-device stress, or any remote staging/production case. Injected lost-ack
+testing is evidence for the uncertain-result contract, not all transport failures.
+
+### Smallest practical tester admission design (proposal only)
+
+Use a staging-only **operator-managed UID allowlist document per synthetic tester**
+outside the user namespace. Deny all client writes to that collection, including
+by the tester; allow management only through separately authorized staging IAM.
+Every allowed user read/list/create/update/delete must require both matching UID
+and an active roster record with an unexpired deadline checked against
+`request.time`. Missing, expired, disabled and other-UID records must deny. Ensure
+no alternate parent/nested/import/preference rule bypasses the gate. Keep this
+proposal separate from production rules until staging-specific deployment exists.
+
+The operator approves roster/UIDs and creates fresh synthetic accounts; distribute
+access privately and omit signup from the future staging UI. **Omitting signup,
+email suffix checks, Auth domains and private URLs do not restrict the public Auth
+account-creation API.** A created Auth identity must never authorize Firestore
+without operator enrollment. For the minimum pilot, explicitly accept possible
+unenrolled Auth identities, or keep public Auth disabled until a reviewed
+server-enforced account-creation restriction exists. If hard signup prevention is
+required, validate an appropriate server-side Auth creation gate and its project
+support/cost before admission; no such control was configured or verified here.
+UID allowlisting enforces data admission even if somebody obtains an Auth token.
+
+Onboarding requires a fresh-account provenance/descendant audit, expiry, case IDs,
+responsible operator and test window before explicit empty initialization. Retain
+the proposed 25 active-task / 100 indexed-document pilot cap as an **operator
+restriction**, not a claimed server limit. No guest import, personal tasks, legacy
+data or manual manifest edits. Remove access by disabling/deleting the roster
+record; new server requests must fail without waiting for token renewal. Also
+disable the Auth identity/revoke sessions under separately approved procedures.
+Revocation cannot erase data already downloaded or undo committed writes. For an
+incident use a separately approved staging deny-all rollout; Admin/IAM access
+requires separate revocation because rules do not constrain privileged operators.
+
+Before tester access, emulator-test allowlist self-enrollment denial, unauthorized
+and expired identities, every nested path, immediate revocation with an existing
+token, and bounded rule-access costs. These tests are pending implementation, not
+included in the 27 tests against current owner-only rules.
+
+Name a cleanup operator and inventory project/UID/descendants before admission.
+Proposed retention remains cleanup within seven days after review and redacted
+evidence for 30 days. Explicit staging-only cleanup approval and verified recursive
+enumeration/deletion are required; deleting Auth or the user marker is insufficient.
+No cleanup job, accounts, IAM grants or admission documents were created.
+
+### Functionality classification and restrictions
+
+| Unresolved area | Classification | Pilot restriction / release requirement |
+| --- | --- | --- |
+| Whole-account deletion | Safe to defer with explicit restrictions | Keep UI/API operation blocked. Before staging access, have an approved operator cleanup inventory/procedure. Before production activation, resolve account deletion and descendant retention requirements. |
+| Existing cloud reconciliation | Required before production activation | Fresh audited synthetic accounts only in staging. No legacy adoption/repair; orphans cannot be ruled out by parent listings. Any existing account requires trusted descendant audit and reviewed reconciliation before use. |
+| Guest-to-account migration | Safe to defer with explicit restrictions | No import/migration in pilot or initial cloud activation. Requires separately consented, revision-aware deduplicated workflow before offering migration; existing pure mapper is not an executor. |
+| Ambiguous legacy Finished Day dates | Safe to defer with explicit restrictions | No legacy imports. Explicit source-matched historical date review required before any later legacy migration; never infer a timezone/date. |
+| Cloud archive editing | Safe to defer with explicit restrictions | Read-only archive UI; no replacement/edit workflow. A later feature requires its own immutable-date/membership/count design. |
+| Oversized accounts/snapshots | Required before staging (safety policy now locally validated) | Reject intact at existing caps; pilot lower operator caps. Accept bounded feature scope before access. Production must explicitly accept caps or design a partitioned protocol; no split destructive batches. |
+| Same-owner integrity and admission | Required before staging access | Owner must accept a trusted synthetic pilot's limited guarantee or harden it; enforce UID admission before any data access. Not resolved by passing owner-only rules tests. |
+
+### Exact local validation evidence
+
+| Check | Final result |
+| --- | --- |
+| `npm.cmd test` | **77/77 passed**, 0 failed/cancelled/skipped; `.firebase/phase47-unit.log`. |
+| `firebase.cmd emulators:exec --config firebase.json --only firestore --project demo-taskly-rules "npm run test:rules"` | **27/27 passed**, 0 failed/cancelled/skipped, exit 0; `.firebase/phase47-rules.log`. Local 8080, real rules and SDK. |
+| `npm.cmd run test:cloud-ui` | **21/21 browser workflow checks passed**, exit 0; `.firebase/phase47-ui.log`, `.firebase/cloud-ui-1792526441407/report.json`. Auth 9099, Firestore 8085, Vite 5174; demo-only synthetic accounts. No unexpected requests/runtime exceptions. |
+| `node scripts/check-local-browser.mjs` | Passed development startup/Settings/reload: **0 Firebase requests, 0 runtime exceptions**, all seven guest values unchanged; `.firebase/local-safety-1792526446751/report.json`. External font requests blocked before transmission. |
+| `npm.cmd run build -- --outDir .firebase/phase47-normal` | Passed, normal production entry. |
+| `npm.cmd run build -- --mode cloud-test --outDir .firebase/phase47-cloud-test` | Passed, normal entry/Auth disabled; not a cloud UI release. |
+| `npm.cmd run build -- --mode github --outDir .firebase/phase47-github` | Passed, `/Taskly/` base retained. |
+| `node scripts/check-isolated-build.mjs <each output directory above>` | **4/4 text artifacts per build, 12/12 total**; actual Vite graph exclusion passes in all three builds. |
+| `git diff --check` | Passed. |
+
+Initial sandbox CLI attempts failed local configstore access; the normal browser
+attempt timed out enabling CDP. Final successful runs used approved local process
+access. No failed attempt is counted as a passing test. The earlier 25-test rules
+run also passed; 27 is the final expanded suite. Existing >500 kB chunk warnings
+remain. Expected emulator permission denials and browser-disconnect diagnostics
+are not unexpected application errors. Runners shut down their own servers and
+emulators. No new dependencies were installed.
+
+Isolation review confirms fixed pre-initialization emulator identity/loopback
+endpoints and no live fallback, staging contract rejection of `taskly-maya` and
+all unpinned projects, no staging runtime/write activation, and no Firestore
+wiring in normal startup. Unit mocks preserve production Auth signup/login/logout/
+reset/observer behavior; no real production authentication was exercised. The
+normal browser case verifies guest startup, not a live restored production login.
+Graph/artifact checks exclude isolated/staging runtime from all builds. Pure
+deployment-plan tests reject missing/ambiguous targets, aliases, wrong scope and
+missing explicit production confirmation without invoking deployment. Raw CLI/
+Admin access is outside those application safeguards and needs scoped IAM.
+
+### Approval evidence and next implementation step
+
+Next phase: **local staging admission and integrity decision/hardening**. Record
+the owner's integrity threat model and provisioning metadata; implement a separate
+locally tested staging UID gate with expiry/revocation and an Auth signup decision.
+If accepting trusted-client integrity is insufficient, design the trusted mutation
+service before implementing a live runtime. Test all gate paths and large rule
+budgets locally. Keep project pin null and writes false during this work.
+
+Only after reviewing that evidence should a separate, concrete checkpoint-A
+project-creation-only permission request be prepared. Initial deny-all, cost/IAM,
+operator and cleanup scope must be reviewable. Before later remote access/writes,
+require the exact pinned web tuple, isolated runtime/network proof, enforced roster,
+signup policy, approved bounds/deferrals, fresh synthetic account provenance and
+reviewed rollback/cleanup procedures. Each remote configuration, account creation,
+rules/Hosting deployment and bounded write action remains separately authorized.
+
+**No remote Firebase data, production Auth, Firebase project/account creation,
+rules/Hosting deployment, credential changes, user-data migration, commit or push
+occurred.** All data mutations were synthetic local demo emulator operations.
+Production/staging cloud writes remain disabled. Stop here after local validation.
+
+---
+
+## Historical Phase 4.6 record
 
 ## Current status — 2026-10-20
 
