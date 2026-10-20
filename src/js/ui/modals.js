@@ -110,6 +110,7 @@ export function openSavedListsDialog({
   onDeleteFinishedDay,
   onLoadFinishedDay,
   onEditFinishedDay,
+  canEditFinishedDays = true,
 }) {
   const modal = createModal('Lists')
   const wrapper = document.createElement('div')
@@ -439,6 +440,7 @@ export function openSavedListsDialog({
     const editButton = createDialogButton('Edit', Pencil)
     editButton.type = 'button'
     editButton.addEventListener('click', () => showFinishedDayEditor(day))
+    editButton.disabled = !canEditFinishedDays
 
     const loadButton = createDialogButton('Load list', FolderOpen)
     loadButton.type = 'button'
@@ -705,8 +707,8 @@ export function openFinishDayDialog({ dateLabel = 'this day', onConfirm, onCance
   cancelButton.focus()
 }
 
-export function openSettingsPanel({ session } = {}) {
-  const account = createAccountSection(session)
+export function openSettingsPanel({ session, appearance, localBackup = true, accountNote } = {}) {
+  const account = createAccountSection(session, accountNote)
   const opener = document.activeElement
   const modal = createModal('Settings', {
     className: 'settings-dialog',
@@ -719,7 +721,8 @@ export function openSettingsPanel({ session } = {}) {
   const panel = document.createElement('div')
   panel.className = 'settings-panel'
 
-  panel.append(account.section, createAppearanceSection(), createBackupSection())
+  panel.append(account.section, createAppearanceSection(appearance))
+  if (localBackup) panel.append(createBackupSection())
   modal.content.append(panel)
   modal.show()
   panel.closest('.taskly-dialog').querySelector('button')?.focus()
@@ -894,6 +897,11 @@ function parseDateKeyForCalendar(dateKey) {
   return new Date(year, month - 1, day)
 }
 
+const activeModals = new Set()
+export function closeAllModals() {
+  for (const dismiss of [...activeModals]) dismiss()
+}
+
 export function createModal(titleText, options = {}) {
   const overlay = document.createElement('div')
   overlay.className = 'taskly-modal'
@@ -923,6 +931,17 @@ export function createModal(titleText, options = {}) {
   dialog.append(header, content)
   overlay.append(dialog)
   let isClosing = false
+  let disposed = false
+  function dismiss() {
+    if (disposed) return
+    disposed = true
+    isClosing = true
+    activeModals.delete(dismiss)
+    document.removeEventListener('keydown', handleKeydown)
+    overlay.remove()
+    options.onClose?.('context-change')
+  }
+  activeModals.add(dismiss)
 
   function close(reason = 'dismiss') {
     if (isClosing) {
@@ -932,6 +951,9 @@ export function createModal(titleText, options = {}) {
     isClosing = true
     document.removeEventListener('keydown', handleKeydown)
     animateModalClose(overlay, dialog, () => {
+      if (disposed) return
+      disposed = true
+      activeModals.delete(dismiss)
       overlay.remove()
       options.onClose?.(reason)
     })
@@ -994,7 +1016,7 @@ function createSettingsRow(labelText, valueText) {
   return row
 }
 
-function createAppearanceSection() {
+function createAppearanceSection(appearance) {
   const section = document.createElement('section')
   section.className = 'settings-theme-section'
   section.setAttribute('aria-labelledby', 'settings-appearance-title')
@@ -1009,11 +1031,11 @@ function createAppearanceSection() {
   hint.id = 'settings-animations-hint'
   hint.className = 'dialog-copy settings-hint'
   hint.textContent = 'System follows your device’s motion preferences.'
-  section.append(title, animations, hint, createThemeSection())
+  section.append(title, animations, hint, createThemeSection(appearance))
   return section
 }
 
-function createThemeSection() {
+function createThemeSection({ load = loadThemeId, select = selectTheme } = {}) {
   const section = document.createElement('section')
   section.className = 'settings-theme-section'
   section.setAttribute('aria-labelledby', 'settings-theme-title')
@@ -1026,7 +1048,7 @@ function createThemeSection() {
   const grid = document.createElement('div')
   grid.className = 'theme-options'
 
-  const selectedThemeId = loadThemeId()
+  const selectedThemeId = load()
 
   themes.forEach((theme) => {
     const button = document.createElement('button')
@@ -1053,8 +1075,9 @@ function createThemeSection() {
 
     button.append(swatches, name)
     button.addEventListener('click', () => {
-      selectTheme(theme.id)
-      updateThemeSelection(grid, theme.id)
+      const result = select(theme.id)
+      if (result?.then) void result.then((saved) => { if (saved !== false && grid.isConnected) updateThemeSelection(grid, theme.id) })
+      else if (result !== false) updateThemeSelection(grid, theme.id)
     })
 
     grid.append(button)

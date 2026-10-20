@@ -10,7 +10,7 @@ function button(text, secondary = false) {
   return element
 }
 
-export function createAccountSection(session = authSession) {
+export function createAccountSection(session = authSession, accountNote = 'Tasks saved on this device.') {
   let mode = null
   let email = ''
   const section = document.createElement('section')
@@ -53,7 +53,7 @@ export function createAccountSection(session = authSession) {
     content.append(error)
     const deviceNote = document.createElement('p')
     deviceNote.className = 'dialog-copy account-device-note'
-    deviceNote.textContent = 'Tasks saved on this device.'
+    deviceNote.textContent = accountNote
 
     if (state.phase === 'authenticated') {
       const identity = document.createElement('p')

@@ -1,5 +1,9 @@
 # Phase 4.3: cloud lifecycle safety
 
+[Phase 4.4 isolated cloud testing](isolated-cloud-testing.md) adds a separate
+emulator-only UI, displayed-revision task arguments and atomic UI copy/save
+operations. Production synchronization and all limits below remain unchanged.
+
 Production synchronization remains **disabled**. No application startup path
 creates an account repository or initializes cloud lifecycle state. This phase
 changes dormant cloud modules, local rules, tests and documentation only. The

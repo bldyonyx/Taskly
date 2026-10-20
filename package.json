@@ -7,6 +7,9 @@
     "test": "node --test",
     "test:rules": "node --test tests/emulator/firestore.rules.mjs",
     "dev": "vite",
+    "dev:cloud-test": "vite --mode cloud-test",
+    "emulators:cloud-test": "firebase emulators:start --config firebase.isolated.json --only auth,firestore --project demo-taskly-isolated",
+    "test:cloud-ui": "firebase emulators:exec --config firebase.isolated.json --only auth,firestore --project demo-taskly-isolated \"node scripts/cloud-ui.mjs\"",
     "build": "vite build",
     "preview": "vite preview"
   },

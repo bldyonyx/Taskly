@@ -13,10 +13,10 @@ export function createAccountData(repository) {
     'conflict', 'An expected account revision from the displayed view is required.')
   const read = () => lifecycle.transact()
   const taskPaths = (parent, tasks) => tasks.map((task) => `${parent}/tasks/${task.id}`)
-  async function changeTask(dateKey, id, transform, { create = false, order } = {}) {
+  async function changeTask(dateKey, id, transform, { create = false, order, expectedRevision } = {}) {
     const parent = parentPath('days', dateKey)
     check(validId(id), 'invalid-input', 'A valid task ID is required.')
-    return lifecycle.transact({ extraPaths: [parent, `${parent}/tasks/${id}`], mutate(aggregates) {
+    return lifecycle.transact({ expectedRevision, extraPaths: [parent, `${parent}/tasks/${id}`], mutate(aggregates) {
       const day = aggregates[parent] ?? { metadata: full({ dateKey, currentListId: null }), tasks: [] }
       const index = day.tasks.findIndex((task) => task.id === id)
       check(create ? index < 0 : index >= 0, 'conflict', create ? 'Task already exists.' : 'Task does not exist.')
@@ -42,9 +42,9 @@ export function createAccountData(repository) {
     }
     return { parent, metadata: full(metadata), tasks }
   }
-  function saveSnapshot(collection, input) {
+  function saveSnapshot(collection, input, expectedRevision) {
     const { parent, metadata, tasks } = snapshotInput(collection, input)
-    return lifecycle.transact({ extraPaths: [parent, ...taskPaths(parent, tasks)], mutate(aggregates) {
+    return lifecycle.transact({ expectedRevision, extraPaths: [parent, ...taskPaths(parent, tasks)], mutate(aggregates) {
       check(!aggregates[parent], 'conflict', 'Snapshot already exists; use explicit replacement with a revision.')
       aggregates[parent] = { metadata, tasks }
     } })
@@ -73,13 +73,34 @@ export function createAccountData(repository) {
     initializeEmptyAccount: lifecycle.initializeEmptyAccount,
     loadAccount: read,
     loadTasks: async (dateKey) => (await read()).aggregates[parentPath('days', dateKey)]?.tasks ?? [],
-    createTask: (dateKey, task, order) => {
+    createTask: (dateKey, task, order, expectedRevision) => {
       const copy = structuredClone(task)
-      return changeTask(dateKey, copy.id, () => full(copy), { create: true, order })
+      return changeTask(dateKey, copy.id, () => full(copy), { create: true, order, expectedRevision })
     },
-    editTask: (dateKey, id, text) => changeTask(dateKey, id, (task) => ({ ...task, text })),
-    completeTask: (dateKey, id, completed) => changeTask(dateKey, id, (task) => ({ ...task, completed })),
-    deleteTask: (dateKey, id) => changeTask(dateKey, id, () => null),
+    editTask: (dateKey, id, text, expectedRevision) => changeTask(dateKey, id, (task) => ({ ...task, text }), { expectedRevision }),
+    completeTask: (dateKey, id, completed, expectedRevision) => changeTask(dateKey, id, (task) => ({ ...task, completed }), { expectedRevision }),
+    deleteTask: (dateKey, id, expectedRevision) => changeTask(dateKey, id, () => null, { expectedRevision }),
+    replaceDatedTasks(dateKey, input, currentListId, expectedRevision) {
+      requireRevision(expectedRevision)
+      const parent = parentPath('days', dateKey)
+      const tasks = structuredClone(input)
+      check(Array.isArray(tasks) && tasks.every((task) => validId(task.id)), 'invalid-input', 'Invalid task IDs.')
+      return lifecycle.transact({ expectedRevision, extraPaths: [parent, ...taskPaths(parent, tasks)], mutate(aggregates) {
+        check(currentListId === null || aggregates[parentPath('savedLists', currentListId)], 'conflict', 'Saved list does not exist.')
+        aggregates[parent] = { metadata: full({ dateKey, currentListId }), tasks }
+      } })
+    },
+    saveListForDate(input, dateKey, expectedRevision) {
+      requireRevision(expectedRevision)
+      const { parent, metadata, tasks } = snapshotInput('savedLists', input)
+      const day = parentPath('days', dateKey)
+      return lifecycle.transact({ expectedRevision, extraPaths: [parent, day, ...taskPaths(parent, tasks)], mutate(aggregates) {
+        check(!aggregates[parent], 'conflict', 'Snapshot already exists.')
+        aggregates[parent] = { metadata, tasks }
+        aggregates[day] ??= { metadata: full({ dateKey, currentListId: null }), tasks: [] }
+        aggregates[day].metadata.currentListId = metadata.id
+      } })
+    },
     reorderTasks(dateKey, ids, expectedRevision) {
       requireRevision(expectedRevision)
       const parent = parentPath('days', dateKey)
@@ -102,7 +123,7 @@ export function createAccountData(repository) {
         aggregates[parent] = day
       } })
     },
-    saveList: (list) => saveSnapshot('savedLists', list),
+    saveList: (list, expectedRevision) => saveSnapshot('savedLists', list, expectedRevision),
     replaceSavedList(list, expectedRevision) {
       requireRevision(expectedRevision)
       const { parent, metadata, tasks } = snapshotInput('savedLists', list)

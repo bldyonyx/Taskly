@@ -1,5 +1,8 @@
 # Phase 4.2: dormant account data integration
 
+For the opt-in emulator-only account UI and current launch/test instructions, see
+[Phase 4.4 isolated cloud testing](isolated-cloud-testing.md).
+
 Phase 4.3 supersedes the lifecycle API and blockers below. See
 [Cloud lifecycle safety](cloud-lifecycle-safety.md) for versioned membership,
 atomic replacement/cascade/Finish Day, proposed local rules and current limits.
