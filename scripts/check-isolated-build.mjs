@@ -10,7 +10,7 @@ async function scan(folder) {
     if (entry.isDirectory()) await scan(file)
     else if (/\.(js|html|css)$/.test(entry.name)) {
       const content = await readFile(file, 'utf8')
-      assert.doesNotMatch(content, /demo-taskly-isolated|emulator-only-key|ISOLATED TEST|src\/isolated|127\.0\.0\.1:8085|TASKLY_STAGING_|taskly-staging|src\/staging|Staging runtime and writes/,
+      assert.doesNotMatch(content, /demo-taskly-(?:isolated|trusted)|firebase-admin|tools\/trusted|emulator-only-key|ISOLATED TEST|src\/isolated|127\.0\.0\.1:(?:8085|8087|9100|8787)|TASKLY_STAGING_|taskly-staging|src\/staging|Staging runtime and writes/,
         `Isolated runtime leaked into production artifact ${file}`)
       count++
     }

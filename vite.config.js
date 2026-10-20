@@ -11,7 +11,7 @@ export default defineConfig(({ mode, command }) => {
     plugins: [{ name: 'taskly-build-boundary',
       generateBundle() {
         for (const id of this.getModuleIds()) {
-          if (/\/(?:src\/(?:isolated|staging)|scripts\/staging-contract)(?:\/|\.)/.test(id.replaceAll('\\', '/'))) {
+          if (/\/(?:src\/(?:isolated|staging)|tools\/trusted|node_modules\/firebase-admin|scripts\/staging-contract)(?:\/|\.)/.test(id.replaceAll('\\', '/'))) {
             this.error('Isolated or staging runtime entered a normal build.')
           }
         }

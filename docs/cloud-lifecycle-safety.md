@@ -1,4 +1,43 @@
-# Phase 4.3: cloud lifecycle safety
+# Phase 4.7.2: trusted lifecycle prototype
+
+The [trusted mutation architecture and full write-path audit](trusted-mutations.md)
+now define an exclusive server writer model and implement four local-only commands:
+`replaceDay`, `saveList`, `finishDay`, and `deleteParent`. A separate candidate
+denies every direct client write, including manifest, parents, references, counts,
+nested tasks, preferences and private receipts/control markers. UID isolation and
+time-limited tester admission apply to reads; the Admin service independently
+verifies identity/admission and all mutation invariants because Admin bypasses rules.
+
+Every new command requires the displayed manifest revision and a stable request
+ID. Server-derived state and a fingerprinted receipt commit atomically; identical
+retries return the original committed result, different-content reuse fails, and
+concurrent conflicting intents have one revision winner. Physical indexed state,
+ordering, references and archive counts are checked before planning. Cascades
+remove children and reverse references in the same bounded transaction. Commands
+that exceed account, byte or old/new union limits fail before writes; there is no
+partial-batch fallback. See the architecture guide for exact schemas/results,
+receipt capacity and emulator-only startup procedure.
+
+Completeness requires audited fresh state and exclusive trusted writers. There is
+no public initialize/adoption path. Operator-inserted descendants under missing
+parents and unsigned-token emulator impersonation remain explicit failing-security
+examples in passing `KNOWN LIMIT` tests. These local experiments do not establish
+safe remote Auth, IAM, adoption, full UI coverage or production-size policy.
+**Remote staging and production synchronization remain NO-GO.**
+
+Canonical rules and production startup are unchanged. The existing cloud UI still
+uses the historical client transaction path and its own emulator configuration;
+it is not migrated to this prototype. No guest storage, backup, recovery,
+credentials or `.env.local` change occurs. No infrastructure is provisioned or
+deployed. Local rollback is stopping the separate tool and emulators; future
+remote rollback must retain deny-client-write rules on service-managed accounts.
+
+See [the staging plan](firebase-staging-plan.md) for exact current validation and
+future staging prerequisites. The sections below describe the legacy protocol.
+
+---
+
+# Historical Phase 4.3: cloud lifecycle safety
 
 For current local rule hardening, enforceable admission experiments and remaining
 same-owner integrity blockers, see [Phase 4.7.1 staging plan](firebase-staging-plan.md).

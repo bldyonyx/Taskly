@@ -1,4 +1,105 @@
-# Taskly Phase 4.7.1 — local integrity hardening
+# Taskly Phase 4.7.2 — trusted mutation boundary (local only)
+
+## Current decision — 2026-10-20
+
+**NO-GO for remote staging access or synchronization.** An emulator-only trusted
+command prototype now demonstrates server-derived manifests, atomic snapshots
+and cascades, mandatory revision checks, UID-scoped idempotency and tester
+admission, with all client writes denied in a separate candidate ruleset.
+This section supersedes current-status recommendations below; previous phase
+results and known gaps remain historical evidence for the legacy paths.
+
+The complete [mutation audit, command schemas and architecture](trusted-mutations.md)
+documents every existing write path, transaction bounds, authentication, exclusive
+writer assumptions, local startup, rollback and future infrastructure requirements.
+Implemented commands are `replaceDay`, `saveList`, `finishDay` and `deleteParent`.
+The new endpoint is loopback tooling only; no UI workflow has been migrated.
+`firestore.trusted.rules` is loaded only by `firebase.trusted.local.json` on demo
+project `demo-taskly-trusted`. Canonical production rules and the legacy admission
+generator are unchanged; no rules are deployed.
+
+All service state writes use a server transaction after authenticated identity,
+current admission, expected revision and bounded physical-state validation.
+Receipts and state commit together. Admin bypasses rules, so the service itself
+must enforce authorization and integrity. Client claims cannot grant Admin
+privileges. There is no public account initialization/adoption command: only
+operator fixtures initialize fresh synthetic accounts in the dedicated emulator.
+
+Remaining blockers include privileged inventory/adoption (missing-parent orphans
+cannot be found by parent queries), emulator unsigned-token identity limitations,
+complete command/UI coverage, signed remote Auth and signup policy, scoped IAM,
+admission operations, request/rate quotas, receipt retention and production size
+policy. Two explicit `KNOWN LIMIT` tests demonstrate operator-inserted orphan
+survival and unsigned emulator-token impersonation. Passing these tests documents
+limitations, not remote security guarantees. Remote activation remains blocked.
+
+Rollback is stopping the local tooling/emulators; nothing deployed needs reversal.
+The existing cloud UI remains the legacy canonical-rules test path, usable with
+its existing command, and cannot write against the new deny-client-write rules.
+Normal guest UI, seven storage keys, backups/recovery and optional Auth remain
+unchanged. Production startup still has zero Firestore operations. Production and
+staging synchronization remain disabled. No real credentials or `.env.local` are
+changed; no remote project, account, data access, deployment, commit or push occurs.
+
+### Files changed
+
+- `tools/trusted/{config,network,commands,service,server}.mjs`: guards, pure
+  command planning, authenticated transactional handler and loopback HTTP adapter.
+- `firestore.trusted.rules`, `firebase.trusted.local.json`: separate local trust
+  boundary, with canonical rules/configurations unchanged.
+- `tests/trusted.test.js`, `tests/emulator/trusted.mjs`: unit grammar/guard checks
+  and real Auth/Firestore adversarial command, HTTP and rule coverage.
+- `package.json`, `package-lock.json`: test/start scripts and development-only
+  `firebase-admin` dependency; `vite.config.js`,
+  `scripts/check-isolated-build.mjs`: reject trusted tooling/Admin in builds.
+- `docs/trusted-mutations.md`, this plan and `docs/cloud-lifecycle-safety.md`:
+  audit, design, procedures, limits and current decision.
+
+### Validation — 2026-10-20
+
+| Check | Exact final result |
+| --- | --- |
+| `npm.cmd test` | 82 passed, 0 failed, 0 skipped. |
+| Canonical Firestore emulator | 35 discovered: 33 passed, 0 failed, 2 admission-only skipped. |
+| Legacy admission candidate emulator | 35 passed, 0 failed, 0 skipped. |
+| `npm.cmd run test:trusted` | 15 passed, 0 failed, 0 skipped; includes 2 explicit known-limit cases and zero non-loopback attempts in the guarded test/service process. |
+| Existing browser emulator workflow suite | 21 passed, exit 0; zero runtime errors or non-loopback attempts, all seven guest keys byte-identical. |
+| Normal production, cloud-test production, GitHub Pages builds | All 3 succeeded, exit 0; existing >500 kB chunk warning remains. |
+| Build isolation | 4 artifacts per build, 12 total passed. |
+| `git diff --check` | Passed; LF/CRLF notices only. |
+
+No required validation category was omitted. The browser suite covers the legacy
+UI, not a new service UI: no UI adapter was added. Remote signed-token/IAM/Auth
+signup enforcement, existing-account inventory/adoption and full future command
+coverage are unexecuted future work. Two passing known-limit tests are not
+security successes. No supported behavior regression was observed; the new
+candidate intentionally disables all legacy client writes, including preferences.
+
+Logs are ignored local artifacts `.firebase/phase472-{unit,rules,admission,trusted,ui}.log`
+and `phase472-{normal,cloud-test,github}.log`. Browser evidence is
+`.firebase/cloud-ui-1792529125506/report.json` and `verified-ui.png`.
+The prototype's socket guard self-test deliberately rejects four remote/ambiguous
+destinations before connection; the real emulator suite records zero attempted
+out-of-policy sockets. An early SDK trial emitted a failed GCE metadata-detection
+warning; automatic probing is now disabled before SDK construction, and final
+validation has no metadata warning. That preliminary probe was not remote
+Firebase data access; the final zero-attempt assertion applies to the guarded
+prototype run, not retroactively to all diagnostic executions. Initial CLI
+sandbox access, injected demo configuration and server credential-constructor
+failures were corrected before final validation. A forged unsigned-token fixture
+needed a current auth_time to demonstrate the known emulator limitation without
+being rejected by the separate revocation check. No check was weakened to pass.
+
+Reproduce the new suite with `npm.cmd run test:trusted`; reproduce canonical,
+admission, browser and build checks using the Phase 4.7.1 commands below with
+`phase472` output directories. All spawned emulator/browser/dev-server runners
+finished and stopped their own processes. No remote Firebase data access,
+infrastructure provisioning, deployment, real-account creation, user-data
+migration, credential change, commit or push was performed.
+
+---
+
+# Historical Taskly Phase 4.7.1 — local integrity hardening
 
 ## Current decision — 2026-10-20
 
