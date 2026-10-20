@@ -24,6 +24,8 @@ const browser = spawn(executable, ['--headless=new', '--remote-debugging-port=0'
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const report = { passed: [], blockedRequests: [], errors: [] }
 const clients = []
+let holdFirestore = false
+const heldRequests = []
 async function until(fn, message, timeout = 25000) {
   const start = Date.now()
   let value
@@ -81,6 +83,8 @@ try {
       if (!allowed && !['data:', 'blob:'].includes(url.protocol)) {
         report.blockedRequests.push(event.request.url)
         void client.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' })
+      } else if (holdFirestore && url.port === '8085') {
+        heldRequests.push({ client, requestId: event.requestId })
       } else void client.send('Fetch.continueRequest', { requestId: event.requestId })
     })
     await client.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
@@ -113,9 +117,9 @@ try {
     await click('[data-cloud-test] button:last-child'); await saved()
   }
   async function logout() { await settings(); await textClick('Log out'); await ready(); assert.equal(await c.eval(`document.querySelector('[data-cloud-test]').dataset.kind`), 'guest') }
-  async function login(email) {
+  async function login(email, waitForReady = true) {
     await settings(); await textClick('Log in'); await fill('#account-email', email); await fill('#account-password', 'isolated-password-123')
-    await submit('.account-form'); await ready()
+    await submit('.account-form'); if (waitForReady) await ready()
     await until(() => c.eval(`document.querySelector('[data-cloud-test]').dataset.kind==='account'`), 'account login')
   }
   async function add(text) { await fill('#new-task', text); await submit('#task-form'); await saved() }
@@ -136,6 +140,7 @@ try {
   const suffix = Date.now()
   const alice = `alice-${suffix}@example.test`; const bob = `bob-${suffix}@example.test`
   await signup(alice); pass('test Auth signup, explicit initialization, empty account with no guest migration')
+  const aliceUid = await c.eval(`document.querySelector('[data-cloud-test]').dataset.uid`)
   await add('First account task'); await add('Second account task'); pass('create tasks through UI with server confirmation')
   await click('#task-list .edit-task'); await fill('.task-edit-input', 'Edited account task')
   await c.eval(`document.querySelector('.task-edit-input').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`)
@@ -202,6 +207,35 @@ try {
   await signup(bob); assert.deepEqual(await taskText(), []); await add('Bob only'); pass('second test account starts empty and stores isolated tasks')
   await logout(); await login(alice)
   assert.equal((await taskText()).includes('Bob only'), false); pass('login to first account never displays second-account tasks')
+  // Keep real Firestore hydration in flight while switching identities via the UI.
+  // Late responses must not restore the previous account, including Alice -> Bob -> Alice.
+  await logout()
+  holdFirestore = true
+  await login(bob, false)
+  await until(() => heldRequests.length > 0, 'held Bob hydration request')
+  assert.equal(await phase(), 'loading')
+  assert.deepEqual(await taskText(), [])
+  await logout()
+  await login(alice, false)
+  assert.equal(await c.eval(`document.querySelector('[data-cloud-test]').dataset.uid`), aliceUid)
+  assert.equal(await phase(), 'loading')
+  assert.deepEqual(await taskText(), [])
+  holdFirestore = false
+  report.cancelledHydrationRequests = 0
+  await Promise.all(heldRequests.splice(0).map(async ({ client, requestId }) => {
+    try { await client.send('Fetch.continueRequest', { requestId }) }
+    catch (error) {
+      // Signing out can cancel an intercepted SDK request before release.
+      // Only this precise CDP cancellation is expected; other errors still fail.
+      if (!error.message.includes('Invalid InterceptionId.')) throw error
+      report.cancelledHydrationRequests++
+    }
+  }))
+  await ready()
+  assert.equal(await c.eval(`document.querySelector('[data-cloud-test]').dataset.uid`), aliceUid)
+  assert.equal((await taskText()).includes('Bob only'), false)
+  assert.equal(await c.eval(`document.documentElement.dataset.theme`), 'ocean')
+  pass('rapid UI account switching with delayed Firestore hydration suppresses stale account data and theme')
   const after = await c.eval(expr((keys) => keys.map((key) => [key, localStorage.getItem(key)]), guestKeys))
   assert.deepEqual(after, guestValues); pass('all seven guest keys remain byte-for-byte unchanged by account workflows')
   const png = await c.send('Page.captureScreenshot', { format: 'png' })

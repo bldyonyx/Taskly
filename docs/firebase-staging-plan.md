@@ -29,11 +29,12 @@ that `.firebaserc` has a production default are superseded by this section.
   production confirmation. Staging/rules/ambiguous deployments are refused by the
   wrapper. Pages CI and Hosting configuration are unchanged; no deployment ran.
 
-Read-only local inspection found that the parsed `.env.local` project ID has a
-trailing double quote. The guard rejects it; **manual quoting correction is
-required before production Auth can work in this checkout**. No environment or
-credential value was rewritten. Valid production Auth remains supported and was
-verified with mocks; no real production login was performed.
+Earlier read-only inspection found a trailing double quote in
+`VITE_FIREBASE_PROJECT_ID`. The final recheck below finds it already corrected:
+no raw/parsed trailing quote, expected project identity, and a complete tuple
+accepted by the local guard. This validation changed no environment or credential
+value. Production Auth remains supported and was verified with mocks; no real
+production login was performed.
 
 Validation evidence is recorded below after the Phase 4.5 history. Remaining
 blockers still include approved project/web tuple and tester admission, pending
@@ -41,8 +42,175 @@ adversarial rules/bounds/UI cases, isolated staging runtime, scoped IAM and
 separate approvals for provisioning, remote Auth/configuration, rules/Hosting and
 bounded synthetic writes. Existing integrity, concurrency, historical-data and
 deletion limits in this plan are not resolved by configuration guards. The next
-step is to review this local diff and complete the pending emulator matrix and
-admission design before seeking project-creation approval.
+step is to review the final evidence and tester policy below and resolve the
+remaining security/limit/admission decisions before seeking project-creation
+approval. The existing Phase 4.4 browser matrix has now been rerun successfully.
+
+## Final validation and readiness decision — 2026-10-20
+
+This section supersedes earlier pending-browser and malformed-local-project
+statements. Previous results below are retained as historical evidence.
+
+### Diff and local configuration review
+
+Reviewed Phase 4.6 commit `b3caa4d` against parent `123ffd7` and the working diff.
+The starting working tree was clean. No confirmed application safety regression
+was found, so no application code or Firestore rules were changed in this pass.
+Only the browser runner and the two safety/staging guides change.
+
+- Guest storage/repository, task/list persistence, `src/main.js`, data boundary,
+  and all seven legacy key definitions are unchanged by Phase 4.6. No automatic
+  migration, import, account-to-guest fallback or user-data rewrite was added.
+  Existing unit coverage and the browser's exact raw seven-key comparison pass.
+- Normal development refuses Auth without the explicit opt-in. Optional normal
+  production/github Auth still supports subscribe/signup/login/logout/reset;
+  local mocked tests validate the interface and matching default-app options.
+  No production login or credential verification request was performed.
+- Normal startup has no Firestore repository or listener wiring. The dormant
+  remote factory always rejects; source synchronization remains false. Emulator
+  startup validates the fixed demo identity/endpoints before SDK initialization.
+  Staging has no runtime, approved project or write activation path.
+- GitHub Pages CI, `firebase.json`, Hosting output configuration and
+  `firestore.rules` are unchanged. The intentional `.firebaserc` change removes
+  the default project and retains an explicit production alias. The new wrapper
+  requires exact project, Hosting scope and literal production confirmation.
+  Raw CLI/IAM access remains outside the wrapper's enforcement boundary.
+- Read-only `.env.local` inspection and Vite `loadEnv('production', ...)` found
+  `VITE_FIREBASE_PROJECT_ID` without a trailing quote, matching the expected
+  production identity. The complete tuple passes the local format guard. The
+  previous malformed value is no longer present; **no manual correction is
+  currently required**. If it recurs, manually remove the unmatched trailing
+  quote; safe format example: `VITE_FIREBASE_PROJECT_ID=your-project-id`.
+  `git check-ignore .env.local` confirms exclusion and the file is untracked.
+  No values or credentials were printed or rewritten; ownership was not checked
+  against a remote service.
+
+### Executed checks and evidence
+
+All final commands below exited 0, with no failed/skipped unit or rules tests.
+Build artifacts use ignored directories and were not opened as production apps.
+
+| Check | Final result |
+| --- | --- |
+| `npm.cmd test` | **75/75 unit tests passed**, 0 failed/cancelled/skipped. Includes all seven environment/deployment tests and existing persistence, Auth, controller and lifecycle tests. |
+| `firebase.cmd emulators:exec --config firebase.json --only firestore --project demo-taskly-rules "npm run test:rules"` | **15/15 Firestore emulator tests passed**, 0 failed/cancelled/skipped; loopback 8080. Log: `.firebase/phase46-final-rules.log`. Expected authorization denials are asserted test cases. |
+| `npm.cmd run test:cloud-ui` | **21/21 browser workflow checks passed** on real local Auth 9099 / Firestore 8085 and Vite 5174, using only `demo-taskly-isolated`, synthetic accounts and a disposable Chromium profile. Log: `.firebase/phase46-final-ui.log`; report: `.firebase/cloud-ui-1792525848866/report.json`; inspected screenshot: `verified-ui.png` in that directory. |
+| `node scripts/check-local-browser.mjs` | Separate development startup/Settings/reload scenario passed: **0 Firebase requests, 0 runtime exceptions**, seven guest values unchanged. Report: `.firebase/local-safety-1792525897738/report.json`. External font requests were blocked before transmission. |
+| `npm.cmd run build -- --outDir .firebase/phase46-final-normal` | Passed; normal production entry. |
+| `npm.cmd run build -- --mode cloud-test --outDir .firebase/phase46-final-cloud-test` | Passed; normal entry, Auth disabled, isolated runtime excluded. |
+| `npm.cmd run build -- --mode github --outDir .firebase/phase46-final-github` | Passed; `/Taskly/` base retained. |
+| `node scripts/check-isolated-build.mjs <output directory>` for each of those three builds | **4/4 text artifacts passed per build**; actual bundler graph guard also passed in each build. |
+| Pure `deploymentPlan()` and environment tests within the unit suite | Missing project, missing production confirmation, staging targets, rules scope and extra arguments rejected; exact production Hosting plan returned without CLI invocation. Production/remote emulator config rejected before initialization, with zero fetch calls; staging activation refused; unknown Vite modes refused. |
+| `git diff --check` | Passed. |
+
+The browser checks cover guest restoration; synthetic signup and explicitly
+initialized empty accounts without migration; task creation, editing, completion,
+pointer drag reordering and deletion; Saved List creation/loading; account theme
+and refresh persistence; Finish Day and Finished Days view with archive editing
+blocked; calendar navigation; two-tab revision conflict and explicit reload;
+offline save rejection and reconnect without replay; logout/login and two-account
+isolation; rapid UI switching with delayed Firestore hydration; exact preservation
+of all seven guest values; and zero non-loopback page requests/runtime exceptions.
+
+The added rapid-switch check holds Firestore requests while Bob loads, signs out
+before hydration finishes and returns to Alice. Both loading views are empty;
+the final UID/theme belong to Alice and Bob's task is absent. Two intercepted
+requests were canceled by sign-out; the runner accepts only the precise CDP
+`Invalid InterceptionId` cancellation when releasing those requests. Unit tests
+separately exercise late factory/read/write completion. The browser case does not
+claim that a canceled network response was delivered to the controller.
+
+Ports 5174/8085/9099 were free at preflight; no existing server was reused and no
+unrelated process was terminated. No port/configuration change was necessary.
+Emulator commands shut down their services and runners closed their own browser
+and Vite processes. Initial sandbox attempts hit CLI configstore/browser access
+restrictions and were rerun with permission. The first extended UI run stopped
+after 18 checks due to the canceled-request harness error; it was not counted as
+a passing suite. The corrected full run above passed all 21 checks. No dependency
+installation was needed. Builds retain the existing JavaScript chunk >500 kB
+warning; that warning is not a test failure.
+
+### Proposed staging tester admission policy
+
+This is a policy for review, not implemented access control or permission to
+create accounts, provision services, deploy rules or write remotely.
+
+1. **Authorized testers:** the owner must explicitly approve a named roster,
+   assigned synthetic UIDs, responsible operator and test window. Use fresh
+   synthetic test identities only, with no personal identifiers, reused personal
+   passwords, personal tasks or existing guest/account data. No invitations,
+   grants or account creation were performed here.
+2. **Separate backend and admission enforcement:** use an exact reviewed and
+   pinned non-production Firebase project/web tuple, separate origin/profile,
+   staging-only IAM and initial deny-all Firestore rules. Before admitting any
+   tester, implement and locally verify a server-controlled UID admission gate
+   or an explicitly reviewed equivalent for Auth/Firestore. Restrict account
+   provisioning to the approved operator. Current owner-only rules admit every
+   authenticated UID to its namespace; neither `@example.test`, a private URL,
+   authorized domains nor the web API key enforces the tester roster. No rules
+   changes or admission implementation are included in this pass.
+3. **Allowed operations after separate write approval:** audited fresh empty
+   account initialization; synthetic task CRUD/reorder; bounded Saved List
+   create/load/replace/delete; Finish Day, read-only archive viewing and supported
+   archive cascade deletion; calendar, theme, refresh, Auth switching, two-tab
+   conflict and offline-recovery checks. Use displayed revisions, stable IDs and
+   explicit authoritative reloads. Initially cap each account at 25 tasks and
+   100 total manifest-indexed documents, below existing client limits; this is an
+   operator policy until staging enforces the reviewed caps. Do not test larger
+   remote boundaries without a separately approved case.
+4. **Disabled operations:** production data/services/synchronization; arbitrary
+   signup or unapproved UIDs; personal/guest imports, automatic migration, legacy
+   account adoption or repair; whole-account deletion; archive editing/replacement;
+   unsupported direct repository mutations, manual manifest edits, bulk writes,
+   automatic conflict retries and offline replay. No flag overrides these gates.
+5. **Retention and cleanup:** retain only synthetic case IDs, bounded records and
+   redacted evidence through the approved test window. Proposed default: remove
+   synthetic backend records and test accounts within seven days after review,
+   subject to explicit staging-only cleanup approval; retain redacted evidence
+   for 30 days. Record the exact project/UID/path inventory, owner and deadline
+   before admission. If an incident needs longer retention, freeze writes and
+   obtain a dated extension. Cleanup must enumerate descendants and verify
+   removal; deleting an Auth account/user marker is not recursive cleanup. No
+   existing cleanup executor or automatic deletion is assumed.
+6. **Stop conditions:** immediately stop edits/test clients for any unexpected
+   destination/write, guest/other-UID leakage, unexplained permission denial,
+   partial state, revision/count/reference mismatch, false Saved indication,
+   uncertain acknowledgment or reconnect replay. Expected conflict/offline/rules
+   denials in an approved case are evidence, not permission to retry blindly.
+   Preserve synthetic IDs/revisions and redacted diagnostics; notify the owner.
+   Resume only after authoritative inspection and explicit review. Use a
+   separately approved restrictive-rules rollback if remote access must be revoked;
+   never repair automatically or consult production as a recovery source.
+
+### Remaining blockers and approval decision
+
+The requested local validation is complete. **NO-GO today for requesting
+project-creation approval as an unqualified readiness decision.** First review
+and record the exact project/region/plan/cost ownership, scoped IAM, admission
+enforcement design and acceptance or remediation of the known same-owner
+integrity limitations. The proposed tester policy has not itself been approved.
+The adversarial manifest/orphan and near-limit rules matrix remains unexecuted;
+15 existing emulator tests and 21 UI checks do not establish those guarantees.
+Resolve those tests or explicitly approve deferring them while provisioning
+remains deny-all and no tester/data operations are permitted.
+
+After that decision record is reviewed, the owner can consider a narrowly scoped
+**project-creation-only** request (checkpoint A), with deny-all initial access.
+Creating an empty project is distinct from readiness for staging writes; missing
+staging runtime and server-enforced admission are implementation blockers for
+access/writes, not claims that provisioning itself changes user data.
+
+No staging runtime or approved project exists and writes remain disabled. Remote
+configuration/Auth accounts, rules deployment (checkpoint B), Hosting deployment,
+and bounded synthetic writes (checkpoint C) each require their own explicit scope
+and approval. Production access, synchronization and migration still require
+checkpoint D. Staging testing remains **NO-GO** until those applicable gates pass.
+
+No real Firebase project/account was created or connected, no production Firebase
+user data was read/written/listened to, no rules or Hosting was deployed, no
+credentials/user data were changed, no migration occurred, and no commit or push
+was made. All account/data mutations in this validation were local synthetic demo
+emulator operations. Production and staging cloud writes remain disabled.
 
 ## Historical Phase 4.5 audit
 
@@ -289,7 +457,7 @@ For corruption/orphans: stop initialization and mutations; do not rebuild the ma
 
 **Production synchronization remains disabled.** Staging signoff does not authorize production access, rules deployment, synchronization or migration. A separate production proposal must resolve/explicitly approve the bounded-account policy, historical-data reconciliation, deletion/recovery policy and supported feature scope before checkpoint D.
 
-## Phase 4.6 validation — 2026-10-20
+## Initial Phase 4.6 validation — 2026-10-20 (historical)
 
 | Check | Actual result |
 | --- | --- |

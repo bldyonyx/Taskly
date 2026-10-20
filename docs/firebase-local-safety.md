@@ -43,11 +43,16 @@ name is not a boundary. The emulator entry exposes only `TASKLY_ISOLATED_*` and
 reads none of those values for its fixed SDK configuration. No credentials are
 needed for emulator tests. Never put service-account credentials into Vite env.
 
-**Manual correction in this checkout:** read-only inspection found a trailing
-double quote in the parsed `.env.local` project ID. It is rejected by the new
-guard. Correct that project's quoting manually before optional production Auth;
-the file and its real credentials were not rewritten. Do not copy its settings
-into emulator or future staging env files.
+**Configuration recheck (2026-10-20):** the earlier inspection found a trailing
+double quote in `VITE_FIREBASE_PROJECT_ID`. Final validation now finds no trailing
+quote in either the raw field or Vite's parsed value; the project matches the
+expected production ID and the complete tuple passes the local guard. No manual
+correction is currently outstanding and this validation did not rewrite the file
+or credentials. If the issue recurs, manually correct that variable's quoting;
+safe example: `VITE_FIREBASE_PROJECT_ID=your-project-id` (no stray trailing quote).
+The actual normal Auth guard additionally requires the exact production ID.
+`.env.local` remains Git-ignored. Local validation does not verify credential
+ownership remotely. Never copy these settings into emulator or staging files.
 
 ## Emulator startup and verification
 
