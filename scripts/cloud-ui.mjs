@@ -22,7 +22,8 @@ await server.listen()
 const browser = spawn(executable, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${root}`,
   '--no-first-run', '--disable-background-networking', '--disable-component-update', '--disable-sync', 'about:blank'], { windowsHide: true, stdio: 'ignore' })
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const report = { passed: [], blockedRequests: [], errors: [] }
+const report = { passed: [], blockedRequests: [], errors: [], cancelledInterceptionRequests: 0 }
+const cancelledInterception = (error) => error.code === -32602 && error.cdpMessage === 'Invalid InterceptionId.'
 const clients = []
 let holdFirestore = false
 const heldRequests = []
@@ -45,7 +46,9 @@ async function connect(url) {
       const entry = pending.get(message.id)
       if (!entry) return
       pending.delete(message.id)
-      if (message.error) entry.reject(new Error(JSON.stringify(message.error)))
+      if (message.error) entry.reject(Object.assign(new Error(JSON.stringify(message.error)), {
+        code: message.error.code, cdpMessage: message.error.message,
+      }))
       else entry.resolve(message.result)
     } else handlers.get(message.method)?.(message.params)
   })
@@ -76,16 +79,24 @@ try {
     await client.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 1400, deviceScaleFactor: 1, mobile: false })
     client.on('Runtime.exceptionThrown', (event) => report.errors.push(event.exceptionDetails.exception?.description ?? event.exceptionDetails.text))
     await client.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] })
+    const intercept = (method, params) => {
+      void client.send(method, params).catch((error) => {
+        // Reload/logout can cancel a paused request before CDP releases it.
+        // Keep the network-denial record and fail on every other CDP error.
+        if (cancelledInterception(error)) report.cancelledInterceptionRequests++
+        else report.errors.push(`${method}: ${error.message}`)
+      })
+    }
     client.on('Fetch.requestPaused', (event) => {
       const url = new URL(event.request.url)
       const allowed = ['http:', 'ws:'].includes(url.protocol) && url.hostname === '127.0.0.1'
         && ['5174', '8085', '9099'].includes(url.port)
       if (!allowed && !['data:', 'blob:'].includes(url.protocol)) {
         report.blockedRequests.push(event.request.url)
-        void client.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' })
+        intercept('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' })
       } else if (holdFirestore && url.port === '8085') {
         heldRequests.push({ client, requestId: event.requestId })
-      } else void client.send('Fetch.continueRequest', { requestId: event.requestId })
+      } else intercept('Fetch.continueRequest', { requestId: event.requestId })
     })
     await client.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
   }
@@ -227,7 +238,7 @@ try {
     catch (error) {
       // Signing out can cancel an intercepted SDK request before release.
       // Only this precise CDP cancellation is expected; other errors still fail.
-      if (!error.message.includes('Invalid InterceptionId.')) throw error
+      if (!cancelledInterception(error)) throw error
       report.cancelledHydrationRequests++
     }
   }))

@@ -1,5 +1,12 @@
 # Phase 4.3: cloud lifecycle safety
 
+For current local rule hardening, enforceable admission experiments and remaining
+same-owner integrity blockers, see [Phase 4.7.1 staging plan](firebase-staging-plan.md).
+The new rules validate real calendar days, written-parent membership, written-day
+list targets and written-archive indexed totals, and deny user-root deletion.
+They do not prove manifest completeness or malicious-owner cascade integrity.
+Remote synchronization remains disabled; the historical protocol below is unchanged.
+
 [Phase 4.4 isolated cloud testing](isolated-cloud-testing.md) adds a separate
 emulator-only UI, displayed-revision task arguments and atomic UI copy/save
 operations. Production synchronization and all limits below remain unchanged.

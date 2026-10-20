@@ -1,4 +1,192 @@
-# Taskly Phase 4.7 — staging readiness and security validation
+# Taskly Phase 4.7.1 — local integrity hardening
+
+## Current decision — 2026-10-20
+
+**NO-GO for remote staging access or synchronization.** Partial server-enforced
+hardening and a local admission candidate are implemented. The owner-authored
+manifest is still not authoritative. Exhaustive manifest, cascade and aggregate
+integrity need a trusted mutation boundary or a reviewed replacement data model.
+This section supersedes changed findings below; Phase 4.7 remains historical.
+No existing weakness has been accepted as safe for remote activation.
+
+No remote project/account provisioning, deployment, remote database access, migration,
+credential or `.env.local` change, commit or push occurred. Production and staging
+synchronization remain disabled. Existing optional production Auth is unchanged
+and separate from synchronization. The seven guest keys are unchanged.
+
+### Root causes and classified outcomes
+
+Paths below are relative to `users/{uid}`. UID isolation is preserved throughout.
+
+| Documents / fields and root cause | Implemented enforcement | Remaining outcome |
+| --- | --- | --- |
+| `lifecycle/state.parents`: manifest rule checks envelope, parent-map size and revision increment, not every entry or physical document. Indexed count is derived as `1 + sum(1 + ids.length)`, not a stored count field. | **Prevented by transaction/repository logic:** valid paths, unique IDs, 350 indexed documents, 200,000 JSON characters, existence and task ordering for the indexed set. **Prevented by rules for written parents:** membership must be a list of at most 348 unique entries. | **Requires trusted server enforcement; remote activation blocked.** Manifest-only arbitrary values/keys, duplicates, oversized ID lists under absent parents, and order reversal without task rewrites remain accepted. No exact account-wide server count guarantee. |
+| `lifecycle/state.revision`: exact +1 does not prove a valid semantic mutation. | Existing **rules prevent** missing CAS participation for aggregate writes, stale/unchanged/jumped revisions, wrong lifecycle ID, reset/deletion. Repository serializes supported writes and detects revision conflicts. | Standalone exact +1 still succeeds without mutation. Concurrent malicious bumps may serialize but represent no legitimate intent. **Requires trusted server enforcement.** Preferences/imports intentionally remain outside aggregate revision participation. |
+| Deleting `days/{date}`, `savedLists/{id}`, `finishedDays/{id}` only checks absence from final index; children can survive. | **Prevented by transaction/repository logic** for supported operations: delete every indexed child and clear indexed references atomically. **Prevented by rules:** user-root deletion now always denies, matching the already unsupported whole-account API. | Full cascade **requires trusted server enforcement; remote activation blocked**. Adversarial tests prove surviving physical children under all three deleted parent families. Empty forged index cannot reveal them. Initialization still requires an audited empty account. |
+| `days/{date}.currentListId` previously checked only null/ID shape. | **Prevented by rules for written days:** referenced list must be indexed and physically exist after the commit (`existsAfter`). Same-commit list creation works; deletion with a rewritten dangling day denies. Repository clears all indexed day references when deleting a list. | Deleting a list with a referencing day left unwritten still bypasses that day's rule. Enumerating all reverse references **requires trusted server enforcement**. Repository rejects corrupt indexed state. |
+| `finishedDays/{id}.totalCount`, `completedCount`; task `order` and completion flags: previous rules checked only scalar bounds and order for written tasks. | **Prevented by rules for written archives:** totalCount equals final index length, with unique/bounded membership. Task writes retain physical-parent, indexed-membership and order-at-position checks. Repository verifies actual indexed counts/flags/order and captures Finish Day source state atomically. | Index can name missing tasks; completedCount can disagree with real flags; untouched parents can retain stale totals. Full physical counts, task ordering and Finish Day provenance **require trusted server enforcement**. Top-level Saved List/Finished Day order retains existing order/ID sorting semantics; no new contiguous-order requirement is imposed. |
+| Day paths and archive `dateKey` accepted February 30 / April 31 through a regex. | **Prevented by rules:** Gregorian calendar month lengths and leap-year arithmetic match client validation, including 1900/2000 cases. | Display date/timestamp strings remain shape-checked, not historical provenance. Original-day review remains explicit. No conversion or repair occurs. |
+
+Matching a count to a forged list is not proof that its tasks exist. Rules evaluate
+affected documents; validating a written parent/task does not validate untouched
+siblings or referencing days. The new per-parent 348 limit follows from 350 minus
+parent and manifest, not a new reduced account limit. No arbitrarily large map or
+collection is enumerated. Residual `KNOWN GAP` tests assert actual acceptance;
+their passing status is evidence of blockers, never a security guarantee.
+
+### Safest complete remediation — design only
+
+Retain this model through a trusted bounded mutation service; deny direct client
+aggregate/manifest writes in separate reviewed rules. Authenticate UID, enforce
+admission on every operation, validate operation input/expected revision and plan
+all changes from trusted state in one transaction. Never accept a client manifest
+as authority. Include request IDs/idempotency and uncertain-acknowledgment handling;
+retain UI session generations, offline failures, conflicts and confirmed success.
+Admin SDKs bypass rules, so service authorization and scoped IAM are mandatory.
+
+Before adopting existing accounts, establish a trusted inventory of actual
+descendants, including under missing parent/root documents. Client index reads
+and parent collection listings cannot prove completeness. For audited fresh
+accounts, exclusive trusted writers can preserve completeness inductively. Each
+delete must enumerate known children and reverse references in the atomic commit;
+an asynchronous cleanup trigger cannot ensure no orphan interval or atomic
+replacement. Over-limit operations reject intact. Historical corrupt data needs
+a separate reviewed reconciliation plan, not silent deletion, adoption or import.
+
+Embedding task arrays in parents would eliminate physical task subcollection
+orphans and help local counts/order, but not account indexing, reverse references
+or Finish Day provenance. It also cannot preserve the current worst-case payload:
+348 tasks of 10,000 characters exceed Firestore's 1 MiB document limit. Such a
+change needs explicit byte limits, schema version, compatibility and opt-in
+migration design. Bounded shards with rule-checkable witnesses are another design
+to evaluate. No flattening, silent limit reduction, trusted service or remote
+infrastructure is introduced here.
+
+### Separate, local admission candidate
+
+`scripts/staging-admission.mjs` derives `.firebase/staging-admission.rules` from
+canonical integrity rules by replacing exactly one owner gate, failing if that
+expected gate changes. Every existing owner permission additionally requires
+`stagingTesters/{uid}.enabled == true` and timestamp `expiresAt > request.time`.
+Missing, malformed, disabled, expired or deleted entries fail closed. All client
+roster reads/writes deny through the existing catch-all. A future scoped operator
+alone manages the roster through trusted tooling; testers must never receive
+Admin credentials or roster IAM permissions.
+
+`firebase.admission.local.json` loads only this generated candidate on loopback
+8086 with demo project `demo-taskly-rules`. Normal Firebase configs are unchanged.
+The candidate is **not deployment-ready**: it retains the integrity blockers and
+there is no approved staging project. It must never be deployed to production.
+Generation performs no SDK/network operation. Emulator roster fixtures use only
+the guarded loopback REST endpoint with emulator `Bearer owner`; these are not
+live operator credentials or a remote management tool.
+
+For later approved staging: pin a dedicated non-production project/web tuple and
+origin in reviewed source, retain the inactive runtime gate, and begin with
+deny-all rules. Operators provision synthetic `@example.test` accounts, audit
+empty accounts, admit exact UIDs with short explicit expiry, and record a
+revocation/cleanup owner. UID admission is the security boundary; the UI email
+suffix is not authorization. Revoke by deleting the entry or setting enabled
+false. Expiration uses request time independently of token refresh. Previously
+downloaded/cached data cannot be recalled, and an already accepted request may
+commit. Trusted service operations must recheck admission because Admin bypasses
+rules. No automatic guest migration is added.
+
+Firestore admission **does not restrict Firebase Auth account creation**. Hiding
+signup is insufficient against direct Auth API calls. Before remote activation,
+choose and verify a server-side policy: with Identity Platform disable end-user
+account creation/deletion and use operator-provisioned users, or use an approved
+`beforeCreate` blocking function to deny uninvited creation. Review providers,
+linking paths, quotas and abuse exposure. This can require Identity Platform
+upgrade/configuration and separate approval. No Auth policy/accounts are changed
+here. Auth accounts may exist without Firestore admission; Auth disabling/token
+revocation is separate from immediate roster revocation. Server-side Auth policy
+remains an activation prerequisite, not something these emulator tests establish.
+
+### Compatibility, changed files and validation
+
+No runtime repository, schema migration, planner or UI change was necessary.
+CRUD, reorder, Saved List replacement, cascades, Finish Day, session switching,
+conflicts, offline failure and acknowledgment behavior keep their existing paths.
+Invalid raw writes and root deletion newly deny; root deletion was already
+unsupported by the repository. Existing inconsistent data can fail future writes;
+there is no automatic repair. Whole-account deletion, archive replacement/editing,
+reconciliation, imports, remote sync and automatic guest migration remain blocked.
+Limits remain 350 indexed documents, 400 distinct old/new transaction paths and
+200,000 manifest JSON characters. Large cases run with and without roster lookups.
+
+Changed files: `firestore.rules`, `tests/emulator/firestore.rules.mjs`, `scripts/cloud-ui.mjs`,
+`scripts/staging-admission.mjs`, `firebase.admission.local.json`,
+`tests/staging-admission.test.js`, this plan and the lifecycle guide pointer.
+Generated rules, logs, builds and browser reports remain ignored in `.firebase/`.
+
+Reproduce (PowerShell, free emulator ports):
+
+```powershell
+npm.cmd test
+firebase.cmd emulators:exec --config firebase.json --only firestore --project demo-taskly-rules "npm run test:rules"
+node scripts/staging-admission.mjs
+$env:TASKLY_TEST_ADMISSION = '1'
+firebase.cmd emulators:exec --config firebase.admission.local.json --only firestore --project demo-taskly-rules "npm run test:rules"
+Remove-Item Env:\TASKLY_TEST_ADMISSION
+npm.cmd run test:cloud-ui
+npm.cmd run build -- --outDir .firebase/phase471-normal
+npm.cmd run build -- --mode cloud-test --outDir .firebase/phase471-cloud-test
+npm.cmd run build -- --mode github --outDir .firebase/phase471-github
+node scripts/check-isolated-build.mjs .firebase/phase471-normal
+node scripts/check-isolated-build.mjs .firebase/phase471-cloud-test
+node scripts/check-isolated-build.mjs .firebase/phase471-github
+git diff --check
+```
+
+Execution results (2026-10-20):
+
+| Check | Exact result |
+| --- | --- |
+| `npm.cmd test` | 78 passed, 0 failed, 0 skipped. |
+| Canonical Firestore emulator | 35 discovered; 33 passed, 0 failed, 2 admission-only cases intentionally skipped. |
+| Separate admission emulator | 35 passed, 0 failed, 0 skipped, including the entire large lifecycle suite. |
+| Normal production / cloud-test production / GitHub Pages builds | All 3 succeeded, exit 0. Existing >500 kB JavaScript chunk warning remains. |
+| Build isolation | 4 artifacts per build, 12 total passed. |
+| Browser emulator workflows | Final run: 21 passed, process exit 0, zero runtime/interception errors and zero non-loopback attempts. All seven guest keys identical. |
+| `git diff --check` | Passed; only Git's existing LF/CRLF conversion notices. |
+
+Initial CLI execution was blocked by sandbox access to the installed Firebase
+configuration; the local demo emulator suites then ran with execution permission.
+The first browser run passed all 21 workflows (child exit 0) but its PowerShell
+stderr capture reported outer exit 1. A diagnostic rerun then exposed an existing
+CDP race on reload: an unhandled `Invalid InterceptionId.` cancellation aborted
+after 10 passed workflows. `scripts/cloud-ui.mjs` now handles only exact CDP code
+`-32602` / message `Invalid InterceptionId.` for paused-request release/failure,
+as the held-hydration path already did; unexpected errors still enter the failing
+error report, and non-loopback attempts remain recorded before blocking. No
+application or security assertion was relaxed. The final run uses cmd.exe to
+retain the native exit status. Logs: `.firebase/phase471-rules.log`,
+`phase471-admission.log`, `phase471-ui.log`, `phase471-ui-final.log` (diagnostic
+failure), and `phase471-ui-verified.log` (final).
+Final JSON/screenshot: `.firebase/cloud-ui-1792527976279/report.json` and
+`verified-ui.png`. No required validation category was omitted. Broader UI
+coverage beyond the existing 21-workflow matrix and live Auth admission policy
+remain untested, as documented above; no remote test was authorized or performed.
+No supported lifecycle regression was observed. Test runners stopped their
+emulators/browser/dev server. `CLOUD_SYNC_ENABLED` remains false,
+`STAGING_WRITES_ENABLED` remains false and `APPROVED_STAGING_PROJECT` remains null.
+
+Recommended next phase: locally design/prototype the trusted bounded mutation
+boundary with direct aggregate writes denied, adversarial tests and audited fresh
+account initialization. Resolve Auth policy, project/operator/IAM decisions and
+remaining UI coverage before requesting remote provisioning/activation approval.
+
+Primary references checked:
+[rules conditions and access budgets](https://firebase.google.com/docs/firestore/security/rules-conditions),
+[parent deletes preserve subcollections](https://firebase.google.com/docs/firestore/manage-data/delete-data),
+[Admin access bypasses rules](https://firebase.google.com/docs/firestore/security/rules-structure),
+[Identity Platform user management](https://docs.cloud.google.com/identity-platform/docs/concepts-manage-users),
+[Auth blocking functions](https://docs.cloud.google.com/identity-platform/docs/blocking-functions).
+
+---
+
+# Historical Phase 4.7 — staging readiness and security validation
 
 ## Phase 4.7 decision — 2026-10-20
 

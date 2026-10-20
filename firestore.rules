@@ -7,8 +7,15 @@ service cloud.firestore {
         && !value.matches('.*[/].*') && value != '.' && value != '..' && !value.matches('__.*__');
     }
     function dateKey(value) {
-      // Calendar shape/range check; the client additionally checks month lengths.
-      return value is string && value.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])');
+      return value is string && value.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])')
+        && calendarDay(value);
+    }
+    function calendarDay(value) {
+      let year = int(value[0:4]);
+      let month = int(value[5:7]);
+      let day = int(value[8:10]);
+      let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+      return day <= (month == 2 ? (leap ? 29 : 28) : (month in [4, 6, 9, 11] ? 30 : 31));
     }
     function text(value, max) { return value is string && value.size() > 0 && value.size() <= max; }
     function nonnegative(value) { return value is int && value >= 0 && value <= 9007199254740991; }
@@ -38,11 +45,22 @@ service cloud.firestore {
       let ids = getAfter(/databases/$(database)/documents/users/$(uid)/lifecycle/state).data.parents[parent];
       return d.order < ids.size() && ids[d.order] == d.id;
     }
+    // These checks cover written parents, not arbitrary manifest-only mutations.
+    // Rules cannot enumerate all descendants or aggregate an unbounded map.
+    function validMembership(uid, parent) {
+      let ids = getAfter(/databases/$(database)/documents/users/$(uid)/lifecycle/state).data.parents[parent];
+      return ids is list && ids.size() <= 348 && ids.toSet().size() == ids.size();
+    }
+    function savedListPresent(uid, listId) {
+      return parentPresent(uid, 'savedLists/' + listId)
+        && existsAfter(/databases/$(database)/documents/users/$(uid)/savedLists/$(listId));
+    }
     match /users/{uid} {
       allow read: if owner(uid);
       allow create: if owner(uid) && base(request.resource.data, uid, []);
       allow update: if owner(uid) && resource.data.ownerId == uid && base(request.resource.data, uid, []);
-      allow delete: if owner(uid);
+      // Whole-account deletion requires trusted recursive cleanup; never a leaf delete.
+      allow delete: if false;
 
       match /lifecycle/{stateId} {
         function valid(d) {
@@ -60,7 +78,8 @@ service cloud.firestore {
       match /days/{dayId} {
         function valid(d) {
           return base(d, uid, ['dateKey', 'currentListId']) && dateKey(dayId) && d.dateKey == dayId
-            && (d.currentListId == null || id(d.currentListId));
+            && validMembership(uid, 'days/' + dayId)
+            && (d.currentListId == null || (id(d.currentListId) && savedListPresent(uid, d.currentListId)));
         }
         allow read: if owner(uid);
         allow delete: if owner(uid) && lifecycleChanged(uid) && !parentPresent(uid, 'days/' + dayId);
@@ -78,6 +97,7 @@ service cloud.firestore {
       match /savedLists/{listId} {
         function valid(d) {
           return base(d, uid, ['id', 'name', 'createdAt', 'updatedAt', 'order']) && d.id == listId && id(listId)
+            && validMembership(uid, 'savedLists/' + listId)
             && text(d.name, 200) && text(d.createdAt, 64) && text(d.updatedAt, 64) && nonnegative(d.order);
         }
         allow read: if owner(uid);
@@ -98,6 +118,8 @@ service cloud.firestore {
         function valid(d) {
           return base(d, uid, ['id', 'dateKey', 'date', 'createdAt', 'completedCount', 'totalCount', 'order'])
             && d.id == finishedId && id(finishedId) && dateKey(d.dateKey) && text(d.date, 64) && text(d.createdAt, 64)
+            && validMembership(uid, 'finishedDays/' + finishedId)
+            && d.totalCount == getAfter(/databases/$(database)/documents/users/$(uid)/lifecycle/state).data.parents['finishedDays/' + finishedId].size()
             && nonnegative(d.completedCount) && nonnegative(d.totalCount) && d.completedCount <= d.totalCount && nonnegative(d.order);
         }
         allow read: if owner(uid);

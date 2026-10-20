@@ -26,6 +26,19 @@ const db = clients.get('alice').db
 const ref = (client, path, uid = 'alice') => doc(clients.get(client).db, `users/${uid}${path ? `/${path}` : ''}`)
 const denied = (operation) => assert.rejects(operation, (error) => error.code === 'permission-denied')
 const fixtures = documents()
+const admission = process.env.TASKLY_TEST_ADMISSION === '1'
+// Emulator-only operator fixture, never a live Admin credential or SDK.
+async function roster(uid, fields) {
+  const response = await fetch(`http://${host}/v1/projects/${projectId}/databases/(default)/documents/stagingTesters/${uid}`, {
+    method: fields === null ? 'DELETE' : 'PATCH',
+    headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' },
+    ...(fields === null ? {} : { body: JSON.stringify({ fields }) }),
+    signal: AbortSignal.timeout(5000),
+  })
+  assert.equal(response.ok, true)
+}
+const admittedFields = () => ({ enabled: { booleanValue: true },
+  expiresAt: { timestampValue: new Date(Date.now() + 3600000).toISOString() } })
 
 // Valid schema/rules cases must also satisfy the new lifecycle protocol so field
 // validation is exercised instead of failing only for a missing revision write.
@@ -61,6 +74,7 @@ const deleteDoc = (reference) => protocolWrite(reference, null, 'delete')
 before(async () => {
   const response = await fetch(`http://${host}/emulator/v1/projects/${projectId}/databases/(default)/documents`, { method: 'DELETE', signal: AbortSignal.timeout(5000) })
   assert.equal(response.ok, true)
+  if (admission) for (const uid of ['alice', 'bob']) await roster(uid, admittedFields())
   // Rules must already be loaded by firebase emulators:exec/start using firebase.json.
   await rawSetDoc(ref('alice', 'lifecycle/state'), { schemaVersion: 1, ownerId: 'alice', revision: 0, parents: {} })
   await rawSetDoc(ref('bob', 'lifecycle/state', 'bob'), { schemaVersion: 1, ownerId: 'bob', revision: 0, parents: {} })
@@ -232,6 +246,7 @@ async function freshCase() {
   const database = initializeFirestore(app, {})
   connectFirestoreEmulator(database, hostname, Number(port), { mockUserToken: { sub: uid, user_id: uid } })
   clients.set(uid, { app, db: database })
+  if (admission) await roster(uid, admittedFields())
   const context = accountClient(uid, uid)
   await context.account.initializeEmptyAccount({ confirmedEmpty: true })
   return { ...context, uid, db: database, ref: (path) => ref(uid, path, uid) }
@@ -315,19 +330,87 @@ test('KNOWN GAP: manifest-only reorder and parent deletion can leave unchanged o
   c.account.dispose()
 })
 
-test('KNOWN GAP: impossible calendar day, dangling list reference and inconsistent finished counts are accepted', async () => {
+test('impossible calendar days, dangling list references and indexed total-count mismatches are denied atomically', async () => {
   const c = await freshCase()
   const full = (data) => ({ schemaVersion: 1, ownerId: c.uid, ...data })
-  await rawMutation(c, { 'days/2026-02-30': [] }, [
-    ['days/2026-02-30', full({ dateKey: '2026-02-30', currentListId: null })],
-  ])
-  assert.equal((await getDoc(c.ref('days/2026-02-30'))).exists(), true)
-  await assert.rejects(c.account.loadAccount())
-  await rawMutation(c, { 'days/2026-11-01': [], 'finishedDays/bad': [] }, [
+  for (const dateKey of ['2026-02-30', '2026-02-29', '1900-02-29', '2026-04-31']) {
+    await denied(rawMutation(c, { [`days/${dateKey}`]: [] }, [
+      [`days/${dateKey}`, full({ dateKey, currentListId: null })],
+    ]))
+  }
+  await denied(rawMutation(c, { 'days/2026-11-01': [] }, [
     ['days/2026-11-01', full({ dateKey: '2026-11-01', currentListId: 'absent' })],
+  ]))
+  await denied(rawMutation(c, { 'finishedDays/bad': [] }, [
     ['finishedDays/bad', full({ id: 'bad', dateKey: '2026-11-01', date: 'arbitrary', createdAt: 'time',
       totalCount: 5, completedCount: 5, order: 0 })],
+  ]))
+  assert.equal(await rev(c.account), 0)
+  assert.equal((await getDoc(c.ref('finishedDays/bad'))).exists(), false)
+  for (const dateKey of ['2000-02-29', '2028-02-29', '2026-04-30']) {
+    await c.account.replaceDatedTasks(dateKey, [], null, await rev(c.account))
+  }
+  c.account.dispose()
+})
+
+test('written parents reject duplicate or oversized membership and user-root deletion is blocked', async () => {
+  const c = await freshCase()
+  const full = (data) => ({ schemaVersion: 1, ownerId: c.uid, ...data })
+  for (const ids of [['same', 'same'], Array.from({ length: 349 }, (_, i) => `t${i}`)]) {
+    await denied(rawMutation(c, { 'days/2026-11-01': ids }, [
+      ['days/2026-11-01', full({ dateKey: '2026-11-01', currentListId: null })],
+    ]))
+  }
+  await rawSetDoc(c.ref(''), full({}))
+  await denied(rawDeleteDoc(c.ref('')))
+  assert.equal(await rev(c.account), 0)
+  c.account.dispose()
+})
+
+test('reference checks use final state: creating a list with a day succeeds but deleting its target in the same commit denies', async () => {
+  const c = await freshCase()
+  await c.account.saveListForDate(listSet(1), '2026-11-01', 0)
+  const index = (await getDoc(c.ref('lifecycle/state'))).data()
+  const day = (await getDoc(c.ref('days/2026-11-01'))).data()
+  await denied(rawMutation(c, { 'days/2026-11-01': [] }, [
+    ['savedLists/boundary', null], ['savedLists/boundary/tasks/t0', null],
+    ['days/2026-11-01', day],
+  ]))
+  assert.equal(await rev(c.account), index.revision)
+  assert.equal(await c.account.loadCurrentList('2026-11-01'), 'boundary')
+  await c.account.deleteSavedList('boundary', index.revision)
+  assert.equal(await c.account.loadCurrentList('2026-11-01'), null)
+  c.account.dispose()
+})
+
+test('KNOWN GAP: manifest-only revision bumps, fabricated counts and completion metadata remain forgeable', async () => {
+  const c = await freshCase()
+  await rawMutation(c, {}) // Exact +1 alone is not proof of a real mutation.
+  assert.equal(await rev(c.account), 1)
+  const full = (data) => ({ schemaVersion: 1, ownerId: c.uid, ...data })
+  await rawMutation(c, { 'finishedDays/forged': ['missing'] }, [
+    ['finishedDays/forged', full({ id: 'forged', dateKey: '2026-11-01', date: '2026-11-01',
+      createdAt: 'time', order: 0, totalCount: 1, completedCount: 1 })],
   ])
+  assert.equal((await getDoc(c.ref('finishedDays/forged/tasks/missing'))).exists(), false)
+  await assert.rejects(c.account.loadAccount(), { code: 'taskly/integrity' })
+  c.account.dispose()
+})
+
+test('KNOWN GAP: changing an unwritten day target or finished completion metadata bypasses aggregate consistency', async () => {
+  const c = await freshCase()
+  await c.account.saveListForDate(listSet(0), '2026-11-01', 0)
+  const index = (await getDoc(c.ref('lifecycle/state'))).data()
+  await rawMutation(c, { 'days/2026-11-01': [] }, [['savedLists/boundary', null]])
+  await assert.rejects(c.account.loadAccount(), { code: 'taskly/integrity' })
+  // Restore only this disposable fixture, explicitly, to isolate the next probe.
+  const { tasks, ...metadata } = listSet(0)
+  await rawMutation(c, index.parents, [['savedLists/boundary', { ...metadata, schemaVersion: 1, ownerId: c.uid }]])
+  await c.account.createFinishedDay({ id: 'counts', dateKey: '2026-11-01', date: '2026-11-01', createdAt: 'time',
+    order: 0, tasks: taskSet(1), totalCount: 1, completedCount: 1 })
+  const state = (await getDoc(c.ref('lifecycle/state'))).data()
+  const finished = (await getDoc(c.ref('finishedDays/counts'))).data()
+  await rawMutation(c, state.parents, [['finishedDays/counts', { ...finished, completedCount: 0 }]])
   await assert.rejects(c.account.loadAccount(), { code: 'taskly/integrity' })
   c.account.dispose()
 })
@@ -628,4 +711,59 @@ test('a server-rejected Finish Day has no partial snapshot or active task deleti
   assert.deepEqual(await good.account.loadTasks(dateKey), [])
   assert.equal((await good.account.loadFinishedDays()).find(({ id }) => id === metadata.id).tasks[0].id, 'retained')
   good.account.dispose(); broken.account.dispose()
+})
+
+for (const family of ['savedLists', 'finishedDays']) {
+  test(`KNOWN GAP: forged ${family} deletion leaves physical snapshot children`, async () => {
+    const c = await freshCase()
+    if (family === 'savedLists') await c.account.saveList(listSet(1))
+    else await c.account.createFinishedDay({ id: 'boundary', dateKey: '2026-11-01', date: '2026-11-01',
+      createdAt: 'time', order: 0, tasks: taskSet(1), totalCount: 1, completedCount: 1 })
+    await rawMutation(c, {}, [[`${family}/boundary`, null]])
+    assert.equal((await getDoc(c.ref(`${family}/boundary/tasks/t0`))).exists(), true)
+    assert.deepEqual((await c.account.loadAccount()).aggregates, {})
+    c.account.dispose()
+  })
+}
+
+test('staging admission fails closed for absent, expired, disabled, malformed and revoked roster entries', { skip: !admission }, async () => {
+  const c = await freshCase()
+  const path = 'preferences/general'
+  const value = { schemaVersion: 1, ownerId: c.uid, themeId: 'forest' }
+  await rawSetDoc(c.ref(path), value)
+  const rosterRef = doc(c.db, `stagingTesters/${c.uid}`)
+  await denied(getDoc(rosterRef))
+  await denied(rawSetDoc(rosterRef, { enabled: true, expiresAt: new Date(Date.now() + 3600000) }))
+  await denied(rawDeleteDoc(rosterRef))
+  for (const fields of [null, {}, { enabled: { booleanValue: true } },
+    { ...admittedFields(), enabled: { booleanValue: false } },
+    { ...admittedFields(), expiresAt: { timestampValue: '2000-01-01T00:00:00Z' } },
+    { ...admittedFields(), expiresAt: { stringValue: '2099-01-01' } }]) {
+    await roster(c.uid, fields)
+    await denied(getDoc(c.ref(path)))
+    await denied(rawSetDoc(c.ref(path), value))
+    await denied(rawDeleteDoc(c.ref(path)))
+    await denied(getDocs(collection(c.db, `users/${c.uid}/days`)))
+    await denied(rawUpdateDoc(c.ref('lifecycle/state'), { revision: 1 }))
+  }
+  await roster(c.uid, admittedFields())
+  assert.deepEqual((await getDoc(c.ref(path))).data(), value)
+  await c.account.replaceDatedTasks('2026-11-01', taskSet(1), null, 0)
+  await roster(c.uid, null)
+  await denied(c.account.editTask('2026-11-01', 't0', 'Revoked'))
+  await denied(getDoc(c.ref('days/2026-11-01/tasks/t0')))
+  c.account.dispose()
+})
+
+test('revoking an admitted UID gates every existing document family and does not admit other owners', { skip: !admission }, async () => {
+  await roster('alice', null)
+  try {
+    for (const { path, data } of [...fixtures, { path: 'lifecycle/state', data: {} }]) {
+      await denied(getDoc(ref('alice', path)))
+      await denied(rawSetDoc(ref('alice', path), data))
+      await denied(rawDeleteDoc(ref('alice', path)))
+    }
+  } finally { await roster('alice', admittedFields()) }
+  await denied(getDoc(ref('bob', 'preferences/general')))
+  assert.equal((await getDoc(ref('alice', 'preferences/general'))).exists(), true)
 })
