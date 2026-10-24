@@ -1,4 +1,135 @@
-# Phase 4.7.4: integrated validation and staging decision (2026-10-24)
+# Phase 4.8: staging infrastructure prepared locally (2026-10-24)
+
+**GO for local preparation/review; NO-GO for remote staging or production.** This
+section supersedes the historical recommendations below. No infrastructure was
+provisioned, no remote Firebase endpoint/data was accessed and nothing was deployed,
+committed or pushed. `APPROVED_STAGING=null`, `APPROVED_STAGING_PROJECT=null`,
+`STAGING_WRITES_ENABLED=false` and normal `CLOUD_SYNC_ENABLED=false` remain closed.
+
+## Prepared architecture and boundaries
+
+The separate lazy `tools/staging/runtime.mjs` factory binds Admin Auth and Firestore
+to the reviewed staging project after activation validation, using managed ADC.
+`identity.mjs` uses Admin `verifyIdToken(token, true)`, then verifies issuer,
+audience, expiry, temporal claims and UID/sub and checks the user exists/enabled.
+UID is exclusively token-derived. No emulator credential/verification path is
+imported. `https.mjs` accepts only exact-origin HTTPS JSON POST at the pinned
+`/mutate` endpoint, bearer authorization, bounded body and the four strict command
+schemas. It provides restricted OPTIONS CORS, omits cookie auth, bounds requests
+per process and returns sanitized structured errors. Origin is not identity.
+
+The extracted `tools/trusted/core.mjs` retains the transaction planner, physical
+inventory/membership verification, displayed revision, server-copy semantics and
+exact idempotency receipts. Admission is re-read inside each transaction, including
+replay; disabled, absent, malformed, expired or over-one-hour admission rejects.
+Staging limits the physical and proposed aggregate count to **50 including the
+manifest** (configurable downward). Control/admission/receipts are separate service
+documents. Existing byte/union/receipt limits remain; overflow fails before writes
+with no truncation, deletion or partial commit. Transaction retries are capped at 3.
+
+`src/staging/config.js` defines the dedicated web/project/origin/endpoint contract
+and null full-tuple source pin. Generic flags cannot activate it. Staging mode is
+still rejected by Vite. The dormant `src/staging/account.js` adapter uses signed
+Auth ID tokens over HTTPS, session checks/abort and the shared browser command
+protocol, without calling the emulator transport. It reports loading, saving,
+confirmed, conflict, offline/uncertain and error phases; confirmation follows
+commit plus authoritative reload. The future staging Auth/read-only repository
+and UI mounting/build target still need reviewed wiring; there is no remote entry.
+Migration, initialization/adoption, theme writes, archive editing and whole-account
+deletion remain unavailable. No guest keys or production entry were changed.
+
+`firestore.staging.rules` is a new local candidate: admitted UID-scoped reads,
+one-hour expiry ceiling, all direct browser writes denied, operator-only roster
+and inaccessible service internals. `firebase.staging.local.json` tests this
+candidate only with demo emulators. Admin bypasses these rules. Required runtime
+entity/transaction/Auth-read permissions, database-scope verification and the
+fact that IAM cannot enforce document-path roster custody are documented in the
+[operator review packet](firebase-staging-operations.md).
+
+## Exact final validation
+
+Logs are ignored under `.firebase/phase48-*.log`. Counts below describe independent
+runs; the 14 HTTPS/client checks are also included in the 103 unit tests.
+
+| Check | Final result |
+| --- | --- |
+| `npm.cmd test` | **103 passed**, 0 failed, 0 skipped (`phase48-unit.log`). |
+| `npm.cmd run test:https` | **14 passed**, 0 failed, 0 skipped: 10 identity/HTTP/config tests and 4 staging browser-adapter tests (`phase48-https.log`). |
+| Canonical Firestore emulator | 35 discovered: **33 passed**, 2 admission-only skipped, 0 failed (`phase48-canonical.log`). |
+| Admission Firestore emulator | **35 passed**, 0 failed/skipped (`phase48-admission.log`). |
+| Trusted service, existing trusted rules | **21 passed**, 0 failed/skipped (`phase48-trusted.log`), including 2 new pilot-cap/admission tests. |
+| Same service suite, staging candidate rules | **21 passed**, 0 failed/skipped (`phase48-staging-rules.log`), including denied direct writes and cross-account reads. |
+| Trusted emulator browser integration | **32 passed**, 0 failed; zero unexpected external requests/runtime exceptions. `.firebase/cloud-ui-1792847687222/report.json`; `verified-ui.png` visually inspected. |
+| Normal production, cloud-test production, Pages builds | **3 passed**, exit 0 (`phase48-{normal,cloud,pages}.log`); existing >500 kB chunk warning only. |
+| Artifact isolation | **12 passed** (4 per build) with `scripts/check-isolated-build.mjs`; bundler graph guards also pass. |
+| `git diff --check` | Passed; CRLF conversion notices only. |
+
+Token tests explicitly distinguish mocked Admin verifier behavior from a real,
+locally generated RSA-signed JWT checked by an injected test verifier. Neither
+proves Google's certificate retrieval, actual Admin cryptographic verification,
+live revocation, deployed ingress or real IAM. The staging-client timeout test
+uses an injected 10 ms timer and abort-aware mocked transport; it is not a measured
+remote timeout. The browser suite still runs the isolated emulator UI, not a
+deployed staging UI. Existing canonical/admission `KNOWN GAP` and trusted
+`KNOWN LIMIT` demonstrations still pass as demonstrations, not closed gaps.
+
+The new real emulator checks accept exactly 50 aggregate documents, reject
+replacement/copy/Finish Day overflow, preserve all existing aggregate/control/
+receipt documents after rejection, reject preexisting physical overflow, prove
+exact replay/changed-key conflict/stale revisions and reject revoked/expired/
+overlong admission even on replay. Local HTTP tests cover missing/invalid/expired/
+wrong-project identity, UID injection, CORS, methods/routes/body limits/schema,
+sanitized errors and per-UID rate bounds. Existing browser tests verify switching,
+guest-key equality and lost acknowledgments after the shared transport extraction.
+
+Reproduction uses the existing ignored `.firebase/phase474/{canonical,admission}.json`
+loopback configs, whose rule copies were checked against canonical/generated
+admission sources, with `CI=true`, empty `DEBUG` and `TASKLY_TEST_ADMISSION=1` only
+for admission. Trusted service: `npm.cmd run test:trusted`; staging candidate:
+`firebase.cmd emulators:exec --config firebase.staging.local.json --only auth,firestore --project demo-taskly-trusted "node --test tests/emulator/trusted.mjs"`.
+Browser: `npm.cmd run test:cloud-ui`. All emulator targets are explicit `demo-*`
+projects. Initial sandbox CLI runs could not read external CLI preferences; those
+attempts were failures, then the authorized local reruns above passed. No remote
+Firebase or deployment command was invoked; public official documentation was read.
+
+## Remaining blockers and approvals
+
+Follow the [operator packet](firebase-staging-operations.md) for project creation,
+billing/quotas, products/domains, IAM, 2–3 synthetic testers, enrollment/expiry,
+managed credentials, logging/audit, seven-day proposed retention, shutdown and
+rollback. It contains separate approval gates for provisioning, privilege/cost
+setup, source pin/build/deployment, enrollment/smoke tests and pilot activation.
+
+Not executed: remote project/Auth/config/data access; actual Firebase signed-token
+verification and revocation; deployed IAM allow/deny tests; hosted TLS/CORS/CSRF,
+distributed rate limits, remote timeout/retry, cost and emergency-shutdown tests.
+No staging UI entry, hosting wrapper, deployable manifest or remote operator fixture
+has been activated. Complete/review their packaging, pin the approved tuple,
+verify managed-runtime environment compatibility and run the approved synthetic
+remote matrix before any pilot GO. Fresh-only inventory/custody is mandatory;
+missing-parent orphans, existing-account reconciliation and production-scale
+retention remain unresolved. Production launch requires a separate decision.
+
+## Files changed
+
+- Server: new `tools/trusted/core.mjs`, `tools/staging/{identity,https,runtime}.mjs`
+  and `tools/staging/environment.example.txt`; refactored `tools/trusted/service.mjs`.
+- Browser/config: new `src/shared/trusted-account.js`, `src/staging/{config,account}.js`;
+  updated `src/isolated/trusted.js`, `scripts/staging-contract.mjs`, `vite.config.js`
+  and `scripts/check-isolated-build.mjs`.
+- Rules/tests: new `firestore.staging.rules`, `firebase.staging.local.json`,
+  `tests/staging-{https,client}.test.js`; updated `tests/emulator/trusted.mjs`,
+  `tests/environment.test.js` and `package.json` (test command only).
+- Documentation: this plan, `docs/trusted-mutations.md`,
+  `docs/firebase-local-safety.md` and new `docs/firebase-staging-operations.md`.
+
+`.env.local`, real credentials, seven guest keys, existing user data, production
+deployment targets and production synchronization were not changed. Stop here:
+**local preparation complete; remote staging and production remain NO-GO.**
+
+---
+
+# Historical Phase 4.7.4: integrated validation and staging decision (2026-10-24)
 
 **NO-GO for remote staging today; GO for preparing the small pilot below.**
 The trusted emulator integration works. The remaining staging blockers are the

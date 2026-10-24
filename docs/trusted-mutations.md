@@ -1,4 +1,46 @@
-# Phase 4.7.4: trusted integration verified (2026-10-24)
+# Phase 4.8: separate HTTPS staging preparation (2026-10-24)
+
+The emulator service delegates transaction execution to `tools/trusted/core.mjs`;
+its loopback-only credentials, Auth verifier and routing remain separate. A dormant
+`tools/staging/runtime.mjs` factory composes managed project-bound Admin Auth,
+`verifyIdToken(token, true)` plus claim/enabled-user checks, strict HTTPS boundary
+and the same core with a maximum **50 aggregate documents including manifest**.
+No server is started or deployed and activation is blocked by the null source pin
+and false write switch. No browser request can select a project or supply a UID.
+
+Admission is transactionally checked before receipt replay, with a one-hour expiry
+ceiling. Physical inventory and next-state counts are server-derived; replacement,
+copy and Finish Day overflow reject before staged writes and preserve receipts.
+Existing schema/byte/union/receipt bounds remain and retries are bounded to 3.
+Four commands only: `replaceDay`, `saveList`, `finishDay`, `deleteParent`.
+
+The HTTPS boundary validates exact origin/endpoint, bearer identity, JSON POST,
+256 KiB raw body, schema/revision/request ID, sanitized response and bounded
+per-process requests. Cookie auth is absent; an Origin header never proves UID.
+Distributed ingress limits, managed execution/RPC deadlines and audit logging need
+approved infrastructure and remote verification. Admin bypasses the candidate
+rules; IAM scopes the runtime to staging but cannot enforce document-path custody.
+
+`src/shared/trusted-account.js` contains only the common browser command protocol.
+The emulator wrapper fixes `/__trusted/mutate`; the dormant staging adapter uses
+its pinned HTTPS endpoint and signed ID tokens, safe session switching, exact retry
+and confirmation after reload. It never invokes the emulator wrapper. No remote
+Auth/reader/UI is mounted; production builds exclude both command transports.
+Unsupported cloud workflows and all remote writes remain disabled.
+
+Final checks: **103 unit**, **14 HTTPS/client** (included in unit count), **21 trusted
+service**, **21 service with staging rules**, **32 emulator browser** passed;
+canonical **33 passed/2 admission-only skipped**, admission **35 passed**, 3 builds
+and 12 artifact scans passed. The RSA test verifies a local test signature; mocked
+Admin and emulator tests do not prove real Firebase signed-token verification.
+See [the current plan](firebase-staging-plan.md) for exact logs/commands, changed
+files and evidence limits, and [the operator packet](firebase-staging-operations.md)
+for IAM, enrollment, billing, shutdown/retention and explicit approval checkpoints.
+**Remote staging and production remain NO-GO.**
+
+---
+
+# Historical Phase 4.7.4: trusted integration verified (2026-10-24)
 
 **Local integration validated; remote staging remains NO-GO pending the A gates
 in the [current staging plan](firebase-staging-plan.md).** That plan contains the

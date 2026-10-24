@@ -6,6 +6,7 @@ import { getAuth } from 'firebase-admin/auth'
 import { prepareLocalRuntime, PROJECT, AUTH_HOST, FIRESTORE_HOST } from '../../tools/trusted/config.mjs'
 import { blockedConnections } from '../../tools/trusted/network.mjs'
 import { createTrustedService } from '../../tools/trusted/service.mjs'
+import { createMutationCore } from '../../tools/trusted/core.mjs'
 import { startTrustedServer } from '../../tools/trusted/server.mjs'
 import { documentsFor, hash } from '../../tools/trusted/commands.mjs'
 
@@ -59,6 +60,45 @@ const snapshot = async (uid) => {
   }
   return data
 }
+
+test('staging cap uses physical server counts: exact 50, overflow replacement/copy/finish rejection and unchanged receipts', async () => {
+  const who = await user('pilot-cap')
+  const pilot = createMutationCore({ db, assertRuntime: prepareLocalRuntime, maxDocuments: 50 })
+  const tasks = Array.from({ length: 48 }, (_, i) => task(`pilot-${i}`))
+  const first = replace(0, tasks)
+  assert.equal((await pilot(who.uid, first)).confirmed, true)
+  const before = await snapshot(who.uid)
+  assert.equal(Object.keys(before).filter(p => !p.startsWith('trusted/') && !p.startsWith('mutationReceipts/')).length, 50)
+  for (const input of [replace(1, [...tasks, task('overflow')]),
+    cmd('saveList', { dateKey: '2026-10-20', id: 'copy', name: 'Copy' }, 1),
+    cmd('finishDay', { dateKey: '2026-10-20', id: 'archive' }, 1)]) {
+    await assert.rejects(pilot(who.uid, input), { trustedCode: 'limit' })
+    assert.deepEqual(await snapshot(who.uid), before)
+  }
+  assert.equal((await pilot(who.uid, first)).replayed, true)
+  const changed = { ...first, payload: { ...first.payload, tasks: [] } }
+  await assert.rejects(pilot(who.uid, changed), { trustedCode: 'idempotency-conflict' })
+  await assert.rejects(pilot(who.uid, replace(0, [])), { trustedCode: 'conflict' })
+  assert.deepEqual(await snapshot(who.uid), before)
+  assert.equal((await pilot(who.uid, cmd('deleteParent', { collection: 'days', id: '2026-10-20' }, 1))).confirmed, true)
+})
+
+test('staging cap rejects preexisting physical overflow and rechecks expired/revoked admission on replay', async () => {
+  const who = await user('pilot-physical')
+  const input = replace(0, Array.from({ length: 49 }, (_, i) => task(`physical-${i}`)))
+  assert.equal((await service.execute(who.token, input)).confirmed, true)
+  const pilot = createMutationCore({ db, assertRuntime: prepareLocalRuntime, maxDocuments: 50 })
+  const before = await snapshot(who.uid)
+  await assert.rejects(pilot(who.uid, replace(1, [])), { trustedCode: 'limit' })
+  assert.deepEqual(await snapshot(who.uid), before)
+  for (const admission of [{ enabled: false, expiresAt: Timestamp.fromMillis(Date.now() + 60000) },
+    { enabled: true, expiresAt: Timestamp.fromMillis(Date.now() - 1) },
+    { enabled: true, expiresAt: Timestamp.fromMillis(Date.now() + 7200000) }]) {
+    await db.doc(`stagingTesters/${who.uid}`).set(admission)
+    await assert.rejects(pilot(who.uid, input), { trustedCode: 'forbidden' })
+    assert.deepEqual(await snapshot(who.uid), before)
+  }
+})
 async function client(path, method = 'GET', fields, token = accounts.alice.token) {
   return fetch(`http://${FIRESTORE_HOST}/v1/projects/${PROJECT}/databases/(default)/documents/${path}`, {
     method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': 'application/json' },

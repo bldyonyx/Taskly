@@ -1,0 +1,24 @@
+// STAGING CANDIDATE ONLY. Not deployed. Admin bypasses these rules and must authorize every command.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function admittedOwner(uid) {
+      let roster = /databases/$(database)/documents/stagingTesters/$(uid);
+      return request.auth != null && request.auth.uid == uid
+        && exists(roster) && get(roster).data.enabled == true
+        && get(roster).data.expiresAt is timestamp && request.time < get(roster).data.expiresAt
+        && get(roster).data.expiresAt <= request.time + duration.value(1, 'h');
+    }
+    match /users/{uid} {
+      allow read: if admittedOwner(uid);
+      match /{family}/{id} {
+        allow read: if family in ['days', 'savedLists', 'finishedDays', 'lifecycle', 'preferences'] && admittedOwner(uid);
+        match /tasks/{taskId} {
+          allow read: if family in ['days', 'savedLists', 'finishedDays'] && admittedOwner(uid);
+        }
+      }
+    }
+    // Includes parents, tasks, receipts, control markers, roster and unknown paths.
+    match /{document=**} { allow write, read: if false; }
+  }
+}

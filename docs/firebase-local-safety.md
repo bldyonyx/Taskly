@@ -1,3 +1,15 @@
+Phase 4.8 update (2026-10-24): a separate dormant staging HTTPS factory and browser
+adapter are prepared. The approved tuple remains null and writes remain false;
+Vite still rejects staging modes. No generic flag activates remote access and no
+normal/Pages build includes staging, server tools or shared command transport.
+The emulator identity/network path is separate from signed-token Admin verification.
+`firebase.staging.local.json` exercises only the new candidate rules with demo
+emulators; it is not a staging deployment configuration. `.env.local`, production
+deployment behavior and all seven guest keys are unchanged. See the
+[Phase 4.8 plan](firebase-staging-plan.md) and
+[operator review packet](firebase-staging-operations.md). No remote operation is
+authorized or performed; remote staging/production remain NO-GO.
+
 Phase 4.7.3 update: the isolated UI now uses the trusted demo project on ports
 9100/8087 and a separate loopback command service. Browser initialization and
 account theme writes are blocked. Follow the current [trusted integration guide](trusted-mutations.md)

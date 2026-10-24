@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
+    "test:https": "node --test tests/staging-https.test.js tests/staging-client.test.js",
     "test:rules": "node --test tests/emulator/firestore.rules.mjs",
     "test:trusted": "firebase emulators:exec --config firebase.trusted.local.json --only auth,firestore --project demo-taskly-trusted \"node --test tests/emulator/trusted.mjs\"",
     "emulators:trusted": "firebase emulators:start --config firebase.trusted.local.json --only auth,firestore --project demo-taskly-trusted",

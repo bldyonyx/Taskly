@@ -1,0 +1,13 @@
+# Documentation only; never loaded by Vite or a deployment tool.
+# Replace placeholders only after separate operator approval. Do not copy .env.local.
+TASKLY_STAGING_ENV=staging
+TASKLY_STAGING_PROJECT_ID=<new-dedicated-project>
+TASKLY_STAGING_AUTH_DOMAIN=<new-dedicated-project>.firebaseapp.com
+TASKLY_STAGING_API_KEY=<dedicated-web-app-public-api-key>
+TASKLY_STAGING_APP_ID=<dedicated-web-app-id>
+TASKLY_STAGING_ORIGIN=https://<approved-static-host>
+TASKLY_STAGING_ENDPOINT=https://<approved-command-host>/mutate
+TASKLY_STAGING_MAX_DOCUMENTS=50
+GCLOUD_PROJECT=<new-dedicated-project>
+# No activation value, private key, emulator setting or ADC credential file.
+# APPROVED_STAGING=null and STAGING_WRITES_ENABLED=false must remain until review.

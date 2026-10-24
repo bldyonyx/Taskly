@@ -85,7 +85,7 @@ test('Vite rejects staging and arbitrary modes before an entry can load', async 
     const config = await resolveConfig({ mode }, 'build')
     const plugin = config.plugins.find((p) => p.name === 'taskly-build-boundary')
     assert.ok(plugin)
-    for (const id of ['/repo/src/isolated/firebase.js', 'C:\\repo\\src\\staging\\main.js', '/repo/scripts/staging-contract.mjs']) {
+    for (const id of ['/repo/src/isolated/firebase.js', 'C:\\repo\\src\\staging\\main.js', '/repo/scripts/staging-contract.mjs', '/repo/tools/staging/runtime.mjs', '/repo/src/shared/trusted-account.js']) {
       assert.throws(() => plugin.generateBundle.call({ getModuleIds: () => [id], error(message) { throw new Error(message) } }), /entered a normal build/)
     }
   }
