@@ -10,7 +10,7 @@ export async function startTrustedServer() {
     res.setHeader('Content-Type', 'application/json')
     res.setHeader('Cache-Control', 'no-store')
     const send = (status, body) => { res.writeHead(status); res.end(JSON.stringify(body)) }
-    if (req.headers.host !== '127.0.0.1:8787' || (req.headers.origin && req.headers.origin !== 'http://127.0.0.1:5174') || req.method !== 'POST'
+    if (req.headers.host !== '127.0.0.1:8787' || (req.headers.origin && req.headers.origin !== 'http://127.0.0.1:5514') || req.method !== 'POST'
       || req.url !== '/mutate' || req.headers['content-type'] !== 'application/json') {
       send(400, { ok: false, code: 'invalid-input', confirmed: false }); return
     }

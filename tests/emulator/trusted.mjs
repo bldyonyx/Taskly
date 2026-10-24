@@ -306,10 +306,10 @@ test('HTTP size and origin gates deny before any account mutation; approved prox
   const account = await user('http-ui')
   const post = (body, origin) => fetch('http://127.0.0.1:8787/mutate', { method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.token}`, Origin: origin }, body })
-  assert.equal((await post(JSON.stringify(replace(0)), 'http://localhost:5174')).status, 400)
-  assert.equal((await post('x'.repeat(262145), 'http://127.0.0.1:5174')).status, 413)
+  assert.equal((await post(JSON.stringify(replace(0)), 'http://localhost:5514')).status, 400)
+  assert.equal((await post('x'.repeat(262145), 'http://127.0.0.1:5514')).status, 413)
   assert.equal((await root(account.uid, 'lifecycle/state').get()).data().revision, 0)
-  assert.equal((await post(JSON.stringify(replace(0)), 'http://127.0.0.1:5174')).status, 200)
+  assert.equal((await post(JSON.stringify(replace(0)), 'http://127.0.0.1:5514')).status, 200)
 })
 
 test('independent trusted sessions racing task reorders preserve IDs and completion with one revision winner', async () => {

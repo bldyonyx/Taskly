@@ -36,6 +36,7 @@ let holdFirestore = false
 let dropCommandResponse = false
 let failCommandRequest = false
 let holdCommand = false
+let holdCommandResponse = false
 const commandRequests = []
 const heldRequests = []
 async function until(fn, message, timeout = 25000) {
@@ -103,6 +104,7 @@ try {
       const url = new URL(event.request.url)
       if (url.pathname === '/__trusted/mutate') {
         if (event.responseStatusCode) {
+          if (holdCommandResponse) { heldRequests.push({ client, requestId: event.requestId }); return }
           if (dropCommandResponse) {
             dropCommandResponse = false
             intercept('Fetch.failRequest', { requestId: event.requestId, errorReason: 'ConnectionClosed' }); return
@@ -119,7 +121,7 @@ try {
         }
       }
       const allowed = ['http:', 'ws:'].includes(url.protocol) && url.hostname === '127.0.0.1'
-        && ['5174', '8087', '9100'].includes(url.port)
+        && ['5514', '8087', '9100'].includes(url.port)
       if (!allowed && !['data:', 'blob:'].includes(url.protocol)) {
         report.blockedRequests.push(event.request.url)
         intercept('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' })
@@ -163,7 +165,7 @@ try {
     await until(() => c.eval(`document.querySelector('[data-cloud-test]').dataset.kind==='account'`), 'account login')
   }
   async function add(text) { await fill('#new-task', text); await submit('#task-form'); await saved() }
-  const origin = 'http://127.0.0.1:5174'
+  const origin = 'http://127.0.0.1:5514'
   await c.send('Page.navigate', { url: origin })
   await ready()
   // Seed only disposable-profile guest data and preserve its exact raw strings.
@@ -217,6 +219,24 @@ try {
   await click('#date-card')
   await c.eval(`{const selected=document.querySelector('.calendar-day.is-selected'); const next=selected.nextElementSibling; next.click()}`)
   await closeModal(); assert.deepEqual(await taskText(), []); pass('calendar date navigation selects a separate dated task context')
+  await click('#saved-lists'); await textClick('Finished days'); await click('.finished-day-open')
+  assert.equal(await c.eval(`[...document.querySelectorAll('.finished-day-details button')].find(el=>el.textContent.trim()==='Edit').disabled`), true)
+  await textClick('Load list'); await saved()
+  assert.equal((await taskText()).length, 2)
+  pass('archive detail is read-only and copy into an unfinished day uses trusted transport')
+  await click('#saved-lists'); await textClick('Load list'); await textClick('Add to current tasks'); await saved()
+  assert.equal((await taskText()).length, 4)
+  pass('Saved List append preserves existing tasks through trusted replacement')
+  await click('#saved-lists'); await click('[aria-label="Delete Trusted replacement"]'); await saved()
+  assert.equal(await c.eval(`document.querySelector('#current-list-label').textContent.includes('Trusted replacement')`), false)
+  await click('#saved-lists'); assert.equal(await query('.saved-list-row'), false); await closeModal()
+  pass('trusted Saved List parent deletion clears references and survives authoritative reload')
+  await click('#saved-lists'); await textClick('Finished days'); await click('.finished-day-open')
+  await textClick('Delete'); await textClick('Delete'); await saved()
+  await click('#saved-lists'); await textClick('Finished days'); assert.equal(await query('.finished-day-row'), false); await closeModal()
+  assert.equal((await taskText()).length, 4)
+  pass('trusted archive parent deletion preserves copied active tasks')
+  const beforeConcurrent = await taskText()
   // A second browser tab shares test Auth, but keeps an independent displayed revision.
   const created = await c.send('Target.createTarget', { url: 'about:blank' })
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
@@ -233,7 +253,7 @@ try {
   await until(async () => (await phase()) === 'conflict', 'visible stale revision conflict')
   assert.equal(await c.eval(`document.querySelector('#new-task').disabled`), true)
   await click('[data-cloud-test] button'); await ready()
-  assert.deepEqual(await taskText(), ['Concurrent task']); pass('two-tab conflict rejected without automatic retry; explicit reload restores authoritative data')
+  assert.deepEqual(await taskText(), ['Concurrent task', ...beforeConcurrent]); pass('two-tab conflict rejected without automatic retry; explicit reload restores authoritative data')
   await c.send('Target.closeTarget', { targetId: created.targetId }); other.close()
   await c.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 })
   await fill('#new-task', 'Offline must not persist'); await submit('#task-form')
@@ -302,18 +322,51 @@ try {
   await until(() => heldRequests.length > 0, 'pending command held before transmission')
   assert.equal(await phase(), 'saving')
   await logout(); assert.deepEqual(await taskText(), ['Guest sentinel'])
+  await login(bob)
+  assert.deepEqual(await taskText(), ['Bob only'])
   holdCommand = false
   for (const { client, requestId } of heldRequests.splice(0)) {
     try { await client.send('Fetch.continueRequest', { requestId }) } catch (error) { if (!cancelledInterception(error)) throw error }
   }
+  assert.deepEqual(await taskText(), ['Bob only'])
+  await logout()
   await login(alice)
   await click('#date-card')
   await c.eval(`document.querySelector('.calendar-day.is-selected').nextElementSibling.click()`)
   await closeModal()
   assert.equal((await taskText()).includes('Canceled session task'), false)
-  pass('logout aborts a pending command and suppresses previous-session results')
+  pass('account switch during a pending command aborts transport and never publishes old-account results')
+  holdCommandResponse = true
+  await fill('#new-task', 'Original account committed'); await submit('#task-form')
+  await until(() => heldRequests.length > 0, 'committed command response held')
+  assert.equal(await phase(), 'saving')
+  assert.equal((await taskText()).includes('Original account committed'), false)
+  await logout(); await login(bob)
+  holdCommandResponse = false
+  for (const { client, requestId } of heldRequests.splice(0)) {
+    try { await client.send('Fetch.continueRequest', { requestId }) } catch (error) { if (!cancelledInterception(error)) throw error }
+  }
+  assert.deepEqual(await taskText(), ['Bob only'])
+  assert.equal(await phase(), 'ready')
+  await logout(); await login(alice)
+  await click('#date-card')
+  await c.eval(`document.querySelector('.calendar-day.is-selected').nextElementSibling.click()`)
+  await closeModal()
+  assert.equal((await taskText()).filter(text => text === 'Original account committed').length, 1)
+  pass('switch after server commit suppresses late success while preserving the original account commit')
   const after = await c.eval(expr((keys) => keys.map((key) => [key, localStorage.getItem(key)]), guestKeys))
   assert.deepEqual(after, guestValues); pass('all seven guest keys remain byte-for-byte unchanged by account workflows')
+  await logout(); await settings(); await click('[data-theme-option="rose"]'); await closeModal()
+  assert.equal(await c.eval(`document.documentElement.dataset.theme`), 'rose')
+  await c.send('Page.reload'); await ready()
+  assert.equal(await c.eval(`document.documentElement.dataset.theme`), 'rose')
+  await settings(); await click('[data-theme-option="forest"]'); await closeModal()
+  assert.deepEqual(await c.eval(expr((keys) => keys.map(key => [key, localStorage.getItem(key)]), guestKeys)), guestValues)
+  pass('guest theme changes persist across refresh and restore the original seven-key fixture')
+  const commands = commandRequests.map(JSON.parse)
+  for (const type of ['replaceDay', 'saveList', 'finishDay', 'deleteParent']) assert.ok(commands.some(command => command.type === type), `Missing trusted browser command ${type}`)
+  report.trustedCommands = Object.fromEntries(['replaceDay', 'saveList', 'finishDay', 'deleteParent'].map(type => [type, commands.filter(command => command.type === type).length]))
+  pass('browser evidence includes every enabled trusted command family')
   const png = await c.send('Page.captureScreenshot', { format: 'png' })
   await writeFile(path.join(root, 'verified-ui.png'), Buffer.from(png.data, 'base64'))
   assert.deepEqual(report.blockedRequests, [], 'Unexpected non-loopback browser request attempted')

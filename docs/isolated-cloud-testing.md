@@ -1,3 +1,12 @@
+# Phase 4.7.4 validation update (2026-10-24)
+
+Current fixed UI origin: **http://127.0.0.1:5514** (5174 is Windows-reserved on
+the validation host). Auth/Firestore remain 9100/8087; trusted service remains
+8787. The exact Origin gate and loopback CSP moved together. The expanded trusted
+browser suite passes 32 checks, including both supported parent deletes and
+account switching after server commit. See the [current staging decision and
+exact results](firebase-staging-plan.md). Remote staging remains disabled.
+
 # Phase 4.7.3: trusted UI integration (2026-10-21)
 
 **NO-GO for remote staging and production synchronization.** The isolated UI now
@@ -9,7 +18,7 @@ change, commit or push is part of this phase.
 The browser reads through a UID-bound repository whose transport rejects every
 nonempty write plan. Mutations use a same-origin Vite development proxy at
 `/__trusted/mutate` to numeric loopback `127.0.0.1:8787`. The separate Node
-service checks Host, optional exact Origin `http://127.0.0.1:5174`, method,
+service checks Host, optional exact Origin `http://127.0.0.1:5514`, method,
 JSON type, 256 KiB body, token, exact command grammar and transaction bounds.
 No CORS or cookie authentication is provided. Vite exposes this proxy only in
 cloud-test serve mode. Normal, cloud-test production and Pages builds exclude it.
@@ -69,7 +78,7 @@ $env:FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9100'
 npm.cmd run dev:trusted
 ```
 
-Terminal C: `npm.cmd run dev:cloud-test`; open `http://127.0.0.1:5174`.
+Terminal C: `npm.cmd run dev:cloud-test`; open `http://127.0.0.1:5514`.
 Sign up with a synthetic account; it initially has no admission or trusted state.
 In a fourth terminal with the same three environment variables, run:
 
@@ -132,7 +141,8 @@ In terminal 2:
 npm.cmd run dev:cloud-test
 ```
 
-Open **http://127.0.0.1:5174** in a fresh browser profile/private session. The
+Historical Phase 4.4 instructions below used **http://127.0.0.1:5174**. Follow
+the current trusted startup instructions above instead. The historical
 window title and banner say **ISOLATED TEST**. Auth connects only to
 `127.0.0.1:9099`, Firestore only to `127.0.0.1:8085`, using the fixed
 `demo-taskly-isolated` project. The emulator UI is disabled. Ports are fixed and

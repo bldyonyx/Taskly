@@ -1,4 +1,223 @@
-# Phase 4.7.3: trusted UI integration (2026-10-21)
+# Phase 4.7.4: integrated validation and staging decision (2026-10-24)
+
+**NO-GO for remote staging today; GO for preparing the small pilot below.**
+The trusted emulator integration works. The remaining staging blockers are the
+remote execution boundary, approved environment configuration and operator
+procedures, not a need to finish every production feature. All older phase
+sections below are historical; this section controls the current recommendation.
+Nothing was provisioned, deployed, migrated, committed or pushed.
+
+## Verified UI and data safety
+
+Inspected `src/isolated/{main,controller,firebase,trusted}.js`, the repository and
+lifecycle readers, trusted service/planner/fixture, candidate rules, Vite boundary,
+staging contract and test runners. The UID-bound reader rejects every nonempty
+transaction plan; the trusted adapter has no direct-write fallback. Candidate
+rules independently deny every client write. The normal entry still has
+`CLOUD_SYNC_ENABLED=false`; `APPROVED_STAGING_PROJECT=null` and
+`STAGING_WRITES_ENABLED=false` remain unchanged.
+
+| Workflow | Actual route and evidence |
+| --- | --- |
+| Task create/edit/complete/delete/reorder | `replaceDay` with displayed revision; real browser form/edit/click/Sortable paths pass. Uncheck/clear use the same adapter; their individual buttons were inspected, not separately clicked in this run. |
+| Saved List create/replace/load/append | `saveList` server copy or explicit replacement; loading/appending uses `replaceDay`. All four paths pass in the browser. |
+| Finish Day / archive view and copy | `finishDay` copies server state atomically. Browser verifies read-only details and copies an archive into an unfinished day through `replaceDay`. |
+| Parent deletion | Browser verifies Saved List and archive `deleteParent`, reference clearing and preservation of copied active tasks. Day deletion is service/adapter tested; no standalone day-delete UI exists. |
+| Login/logout, two accounts, calendar, refresh | Real emulator Auth and Firestore; no guest migration or old-account task/theme hydration. |
+| Themes | Account theme controls are disabled; no trusted preference command. Guest theme changes survive refresh and restore the fixture. |
+| Conflicts, offline, interrupted requests | Two tabs conflict visibly; explicit reload uses the authoritative revision. Offline intent is not queued. Lost committed acknowledgment retries identical request bytes and advances the revision once. A simulated pre-service 503 also retries exactly. |
+| Switching during pending work | Tests switch before transmission and after server commit/before delivery of acknowledgment. Bob never renders Alice's result; Alice's accepted commit survives and appears on return. |
+
+UI success requires commit confirmation plus authoritative reload. New edits and
+reload are blocked during an uncertain outcome; retry keeps request ID, payload
+and expected revision. Logout invalidates the repository, aborts fetch and clears
+rendered state synchronously. An accepted command can still commit to its original
+UID; cancellation is not rollback. Browser refresh loses the in-memory retry;
+operators must inspect server state before creating another intent.
+
+Browser equality checks compare raw values (including absent keys) of all seven
+guest keys before/after account workflows. Guest theme testing then deliberately
+changes the disposable theme and restores exact original values. No real browser
+profile or user storage was accessed. All nine backup/recovery unit tests pass,
+including rollback failure and interrupted restore recovery; browser backup
+download/upload was not rerun. Existing-account initialization/adoption, imports,
+migration, arbitrary archive creation/editing and whole-account deletion remain
+unavailable. Existing snapshot ID collisions reject; only an explicit replacement
+command may replace an existing Saved List. Failed validation leaves aggregate,
+control and receipt documents unchanged.
+
+## Exact validation results
+
+Final local results, 2026-10-24; logs are ignored under `.firebase/phase474/`.
+
+| Check | Result / evidence |
+| --- | --- |
+| `npm.cmd test` | 89 passed, 0 failed, 0 skipped (`unit.log`); includes 9 backup/recovery and 6 trusted-adapter tests. |
+| Canonical Firestore emulator | 35 discovered: 33 passed, 0 failed, 2 admission-only skipped (`canonical.log`). |
+| Admission Firestore emulator | 35 passed, 0 failed, 0 skipped (`admission.log`), `TASKLY_TEST_ADMISSION=1`; generated with `node scripts/staging-admission.mjs`. |
+| Trusted Auth/Firestore service | 19 passed, 0 failed, 0 skipped (`trusted.log`), including two explicit known-limit demonstrations. |
+| Trusted browser integration | 32 passed, 0 failed (`browser.log`); report `.firebase/cloud-ui-1792846569951/report.json`, screenshot `verified-ui.png` visually inspected. |
+| Browser transport evidence | 25 intercepted mutation attempts: 20 `replaceDay`, 2 `saveList`, 1 `finishDay`, 2 `deleteParent`; includes retries and aborted attempts, not 25 distinct commits. Zero unexpected external browser requests and zero runtime exceptions. |
+| Production / cloud-test production / Pages builds | All 3 exit 0 (`normal-build.log`, `cloud-build.log`, `pages-build.log`); existing >500 kB chunk warning. Cloud-test build remains the normal entry with Auth disabled, not a deployable trusted UI. |
+| Artifact isolation | 4 scanned artifacts per build, 12 total pass via `scripts/check-isolated-build.mjs`; bundler graph boundary also passes. |
+| `git diff --check` | Pass; line-ending notices are informational. |
+
+Reproduction: canonical default port 8080 was occupied, so a disposable config
+uses Firestore 8088, websocket 9158, hub 4418, logging 4518; admission uses
+8089/9159/4419/4519. Rules copies beside those configs are byte-identical to the
+canonical file/generated candidate. Run
+`firebase.cmd emulators:exec --config .firebase/phase474/canonical.json --only firestore --project demo-taskly-rules "npm run test:rules"`
+and the analogous `admission.json` command with `TASKLY_TEST_ADMISSION=1`.
+These disposable configs are not deployment configurations.
+
+Initial attempts were not valid passes: sandbox CLI preference access failed;
+simultaneous default hubs collided; default Firestore 8080 was occupied; a
+disposable config initially resolved a missing rules file (and therefore ran with
+open demo rules and failed assertions). The final canonical/admission runs loaded
+the verified rules copies. The expanded browser test initially needed its old
+empty-day conflict expectation adjusted after adding archive-copy tasks.
+Windows reserves TCP 5141-5240, making 5174 unusable here. The isolated fixed
+port, exact service Origin gate, CSP and browser allowlist now consistently use
+**5514**; no wildcard, port fallback or Windows configuration change was added.
+No unrelated process was stopped.
+
+Security cases in the **19 real emulator tests**:
+
+| Boundary | Observed result |
+| --- | --- |
+| Missing/invalid Auth; expired/wrong audience/wrong issuer/revoked sessions; disabled/deleted/unknown user | Rejected as unauthenticated. |
+| Missing/malformed/disabled/expired/revoked tester admission | Reads and commands denied, including receipt replay. Roster is re-read transactionally. |
+| Cross-account paths, UID/owner injection and fabricated metadata | Input rejected or target absent in the caller's account; other account snapshot unchanged; client cross-account reads denied. |
+| Stale revision, duplicate ID, changed content with same ID | Conflict; exact duplicate has one effect and replay result; changed content is an idempotency conflict. Concurrent updates/reorders and list replacement/deletion have one revision winner. |
+| Raw Firestore bypass | Manifest, tasks, parents, preferences, imports, receipts, trusted controls, roster and root deletion denied. Private control read denied; admitted owner read succeeds. |
+| Malformed/unsupported payload, HTTP origin/body size, account size and old/new union overflow | Rejected; snapshots and receipts preserved. Server copy/count/reference/cascade invariants verified. |
+| Receipt capacity | New requests stop at 1,000; old exact receipts still replay. No unsafe eviction. |
+| Known limit: forged existing-UID emulator JWT | **Impersonation succeeds in the demonstration.** Emulator tokens are unsigned; this is not remote authentication evidence. |
+| Known limit: privileged orphan insertion under absent parent | **Orphan survives the demonstration.** Parent queries cannot inventory it. Client rules prevent this insertion, but Admin bypasses rules. |
+
+No remote signed-token, IAM, deployed ingress, remote latency/timeout or remote
+billing tests were executed. The actual 15-second browser timeout expiring was
+not separately timed; interrupted response, offline and 503 recovery were tested.
+These are explicit evidence limits, not silently skipped emulator test categories.
+The canonical/admission suites each include six `KNOWN GAP` demonstrations:
+owner-forged manifest membership/bounds, orphaning/reorder, revision/count
+forgery, unwritten references/completion metadata and both snapshot-parent
+cascades. Those legacy rules are not staging candidates for trusted accounts;
+their passing demonstration tests must not be counted as closed integrity gaps.
+
+## Ranked blockers and the minimum pilot
+
+**A - must fix before staging (highest priority first):**
+
+1. Remote authentication/exclusive writer: implement a separate reviewed HTTPS
+   function adapter, using signed project-bound Admin `verifyIdToken(token, true)`
+   and enabled-user checks, deriving UID only from verification. Reject unsigned,
+   wrong-project and revoked tokens; forbid every emulator variable and dummy
+   credential. Never deploy the current loopback server or loosen its guards.
+   Deploy the trusted deny-all-client-write rules, not canonical/admission legacy
+   writer rules. Scope the runtime service identity to the staging database and
+   required Auth reads; no project Editor/Owner or production access.
+2. Environment separation: approve and pin a new project/web tuple, named app,
+   dedicated staging entry/origin/CSP and separate build/deployment target. The
+   present Vite mode guard and constants intentionally reject staging. Add local
+   rejection tests before any remote activation; normal/Pages artifacts retain
+   their current boundaries. A deployed Vite development proxy is not a solution.
+3. Admission/operator custody: precreate only 2-3 approved synthetic identities;
+   remove public signup from the pilot UI. Enforce UID allowlist and <=1-hour
+   expiry in rules and service, including replay. Auth account creation alone
+   never admits a tester. Document who grants/revokes access, separate deployer,
+   runtime and fixture privileges, audit privileged changes, and test expiry/
+   disabling/shutdown. UI signup removal is not a backend signup restriction;
+   unlisted identities must receive zero account-data access.
+4. Integrity and bounds: use an entirely new, empty staging database, fresh UIDs,
+   operator create-only initialization and a recorded empty-project inventory.
+   No existing account adoption or direct operator task insertion. Enforce a pilot
+   cap of **50 aggregate documents including manifest**, 256 KiB input and current
+   conservative byte/union limits in the server. Retain all receipts, stop at
+   1,000 commands/account and reset only through separately approved disposal.
+   Validate replacement/Finish Day overflow atomically against the pilot cap.
+5. Remote failure/cost controls: bound function execution, concurrency/instances,
+   request rate and transaction retries; preserve exact-retry receipts when the
+   client times out first. Specify the admission cutoff (already accepted work
+   may commit), clock policy, sanitized error mapping and a tested shutdown
+   runbook. Basic operational logs, budget alerts and an owner are sufficient for
+   this pilot. Verify signed-token, denied direct writes, two-account isolation,
+   lost acknowledgment and rollback with synthetic staging smoke tests only
+   after separate approvals.
+
+**B - must fix before production:** audited adoption/reconciliation with full
+descendant inventory if supporting existing accounts; a scalable account/history
+and receipt retention protocol; real-user signup/abuse controls and monitoring;
+documented backup/restore, retention, privacy and whole-account erasure guarantees
+before promising those capabilities. Multi-device/offline recovery UX needs an
+explicit policy for browser-refresh loss of retry intent. None requires adopting
+old accounts, processing real data or building durable offline replay for this pilot.
+
+**C - can defer while visibly disabled:** account theme writes, cloud archive
+editing/replacement, migration/import, whole-account deletion, richer preference
+sync and general offline queues. Missing-parent orphan reconciliation also defers
+for the fresh-only pilot under controlled privileged custody; it becomes A if any
+existing data or uncontrolled Admin writer is introduced. Existing guest
+backup/recovery remains available without becoming a cloud backup feature.
+
+Proposed architecture (not created): one dedicated Firebase project with Auth,
+Firestore, Firebase Hosting for the separate static staging artifact and one
+second-generation HTTPS Cloud Function for verified commands. The function uses
+managed credentials and one dedicated service account; Hosting routes the exact
+mutation path to it. Reuse the reviewed pure planner/transaction logic behind a
+separate remote adapter; do not import tooling network guards/dummy credentials.
+Enable only the four verified command families and the read-only account views.
+Archive editing, automatic migration and whole-account deletion stay disabled.
+
+Functions require a billing-enabled Blaze plan; reads of the bounded inventory
+on every mutation and client reload, writes/deletes/receipts, compute/network,
+Hosting, build/artifact storage and logging can incur costs despite free quotas.
+Choose one region near testers, min instances 0, a small maximum instance count
+and an approved spending envelope. Budget alerts are not a hard spending cap;
+rate/admission/instance limits and shutdown provide the operational bounds.
+No Storage, Analytics, Realtime Database or scheduled cleanup product is needed.
+See [Firebase pricing](https://firebase.google.com/pricing),
+[ID token verification](https://firebase.google.com/docs/auth/admin/verify-id-tokens),
+[Firestore limits](https://firebase.google.com/docs/firestore/quotas) and
+[function limits](https://firebase.google.com/docs/functions/quotas), checked
+2026-10-24. Firestore documents have a 1 MiB limit; requests 10 MiB and
+transactions 270 seconds/60 seconds idle. Local application limits are deliberately
+smaller and do not prove hosted limits or latency behavior.
+
+Rollback/shutdown proposal: disable tester admissions and command ingress, remove
+the staging artifact/route and revoke the runtime's staging write access; allow
+accepted work to settle, then verify quiescence with an approved operator read.
+Keep direct writes denied throughout. Retain snapshots/receipts/logs for diagnosis;
+never roll back by restoring legacy writable rules or deleting accounts. Resume
+only after reviewing the pinned build and integrity. Disposal of synthetic project
+data is a separate explicit operator action. Production and guest data are outside
+the staging rollback.
+
+## Shortest safe next sequence and go/no-go gates
+
+1. Implement and locally review the separate remote adapter/entry, signed-token
+   rejection checks, 50-document pilot bound and explicit deployment manifests.
+2. Prepare a concrete project/IAM/region/billing/allowlist/command/shutdown checklist
+   for operator approval. Provisioning, remote Auth/config access, rules/function/
+   Hosting deployment and activation of synthetic writes require explicit approval;
+   no approval or infrastructure is implied by this validation.
+3. After approvals only, provision the empty project, initialize approved synthetic
+   UIDs, deploy pinned artifacts with client writes denied and run the bounded
+   remote smoke matrix. Stop immediately on an A-class failure.
+4. GO for the limited pilot only when all A gates and remote smoke tests pass,
+   guest/build isolation remains green and shutdown is demonstrated. Production
+   remains NO-GO; B work and a separate launch decision remain outstanding.
+
+No Taskly remote Firebase data/Auth endpoint or deployment was accessed. One
+initial Firebase CLI startup attempted its public `firebase-public/cli.json`
+message-of-the-day lookup; subsequent CLI runs used `CI=true` to suppress it.
+Public Firebase documentation was read for limits/pricing. Thus this is not a
+claim of zero network activity by all tooling. No real accounts, credentials,
+`.env.local` or existing user data were changed.
+
+---
+
+# Historical: Phase 4.7.3 trusted UI integration (2026-10-21)
 
 **NO-GO for remote staging and production synchronization.** The isolated UI now
 uses the trusted demo project and deny-client-write candidate. This section
@@ -9,7 +228,7 @@ change, commit or push is part of this phase.
 The browser reads through a UID-bound repository whose transport rejects every
 nonempty write plan. Mutations use a same-origin Vite development proxy at
 `/__trusted/mutate` to numeric loopback `127.0.0.1:8787`. The separate Node
-service checks Host, optional exact Origin `http://127.0.0.1:5174`, method,
+service checks Host, optional exact Origin `http://127.0.0.1:5514`, method,
 JSON type, 256 KiB body, token, exact command grammar and transaction bounds.
 No CORS or cookie authentication is provided. Vite exposes this proxy only in
 cloud-test serve mode. Normal, cloud-test production and Pages builds exclude it.
@@ -69,7 +288,7 @@ $env:FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9100'
 npm.cmd run dev:trusted
 ```
 
-Terminal C: `npm.cmd run dev:cloud-test`; open `http://127.0.0.1:5174`.
+Terminal C: `npm.cmd run dev:cloud-test`; open `http://127.0.0.1:5514`.
 Sign up with a synthetic account; it initially has no admission or trusted state.
 In a fourth terminal with the same three environment variables, run:
 

@@ -1,3 +1,50 @@
+# Phase 4.7.4: trusted integration verified (2026-10-24)
+
+**Local integration validated; remote staging remains NO-GO pending the A gates
+in the [current staging plan](firebase-staging-plan.md).** That plan contains the
+complete security matrix, fresh-only pilot, ranked blockers and approval sequence.
+Historical phases below do not describe current readiness.
+
+Final checks: **89 unit tests passed; canonical rules 33 passed / 2 admission-only
+skipped; admission rules 35 passed; trusted service 19 passed; trusted browser 32
+checks passed; all 3 builds and 12 artifact isolation checks passed; diff check
+passed.** No failures in final runs. The two known-limit service tests demonstrate
+unsigned emulator JWT impersonation and privileged absent-parent orphan survival;
+they do not establish secure remote identity or complete orphan inventory.
+
+The expanded real browser suite verifies CRUD/Sortable, Saved List creation,
+replacement/load/append/deletion, Finish Day, read-only archive details/copy/
+deletion, refresh/calendar, two accounts/tabs, offline recovery, identical retries,
+and switching both before transmission and after commit before acknowledgment.
+The successful report records 25 intercepted attempts across all four command
+families (20/2/1/2), zero external requests and zero runtime exceptions. Account
+theme writes stay disabled; guest theme changes persist. All seven guest keys
+are byte-identical after account workflows; nine unit tests cover backup/recovery.
+Day parent deletion is tested in the service and adapter, not exposed as a
+separate UI control. Uncheck/clear handlers were inspected but not individually
+clicked. Browser backup import/export and actual timeout expiry were not rerun.
+No remote Auth/IAM/deployment/latency validation is claimed.
+
+Windows reserved port 5174 in this environment. The isolated development origin
+is now fixed to **http://127.0.0.1:5514**, consistently in Vite, CSP, browser tests
+and the service's exact optional Origin check. The service stays on 8787 and
+emulators on 9100/8087. No wildcard origin or automatic port fallback was added.
+Use `CI=true` when running emulator suites to suppress CLI public MOTD lookups.
+Logs: `.firebase/phase474/`; successful browser report and inspected screenshot:
+`.firebase/cloud-ui-1792846569951/`. No remote Taskly Firebase data access,
+provisioning, deployment, credentials/env changes, commit or push occurred.
+
+Small-pilot limits can avoid production work: 2-3 synthetic testers in a separate
+empty project, explicit expiring UID admission, 50 aggregate documents/account,
+four verified commands, all client writes denied, retained receipts capped at
+1,000 commands/account, no adoption/migration/whole-account deletion/archive
+editing. A separate signed-token HTTPS adapter, staging entry, restricted IAM,
+operator custody and tested failure/shutdown procedures are required before
+activation. Existing-account reconciliation and general receipt pruning can
+wait while those accounts/features remain excluded.
+
+---
+
 # Phase 4.7.3: trusted UI integration (2026-10-21)
 
 **NO-GO for remote staging and production synchronization.** The isolated UI now
@@ -9,7 +56,7 @@ change, commit or push is part of this phase.
 The browser reads through a UID-bound repository whose transport rejects every
 nonempty write plan. Mutations use a same-origin Vite development proxy at
 `/__trusted/mutate` to numeric loopback `127.0.0.1:8787`. The separate Node
-service checks Host, optional exact Origin `http://127.0.0.1:5174`, method,
+service checks Host, optional exact Origin `http://127.0.0.1:5514`, method,
 JSON type, 256 KiB body, token, exact command grammar and transaction bounds.
 No CORS or cookie authentication is provided. Vite exposes this proxy only in
 cloud-test serve mode. Normal, cloud-test production and Pages builds exclude it.
@@ -69,7 +116,7 @@ $env:FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9100'
 npm.cmd run dev:trusted
 ```
 
-Terminal C: `npm.cmd run dev:cloud-test`; open `http://127.0.0.1:5174`.
+Terminal C: `npm.cmd run dev:cloud-test`; open `http://127.0.0.1:5514`.
 Sign up with a synthetic account; it initially has no admission or trusted state.
 In a fourth terminal with the same three environment variables, run:
 

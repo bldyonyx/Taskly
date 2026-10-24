@@ -62,10 +62,12 @@ ownership remotely. Never copy these settings into emulator or staging files.
 
 ## Emulator startup and verification
 
-Run `npm run emulators:cloud-test`, then `npm run dev:cloud-test`, and open
-`http://127.0.0.1:5174` in a disposable profile. Project is fixed to
-`demo-taskly-isolated`; Auth is `127.0.0.1:9099` and Firestore
-`127.0.0.1:8085`. Configuration is checked before `initializeApp`. Both emulator
+Run the emulators, trusted service and Vite as described in the
+[trusted startup guide](trusted-mutations.md). Open `http://127.0.0.1:5514` in a
+disposable profile. Project is fixed to `demo-taskly-trusted`; Auth is
+`127.0.0.1:9100`, Firestore `127.0.0.1:8087` and the trusted service
+`127.0.0.1:8787`. Fresh synthetic accounts require the explicit operator fixture;
+browser initialization is disabled. Configuration is checked before `initializeApp`. Both emulator
 connections precede persistence, session observation and account operations.
 Configuration failures show a startup alert. Unavailable emulators cause local
 service errors; there is no live-service fallback. A loopback-only CSP remains.
