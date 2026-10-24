@@ -1,6 +1,6 @@
-export const ISOLATED_PROJECT = 'demo-taskly-isolated'
-export const ISOLATED_AUTH_PORT = 9099
-export const ISOLATED_FIRESTORE_PORT = 8085
+export const ISOLATED_PROJECT = 'demo-taskly-trusted'
+export const ISOLATED_AUTH_PORT = 9100
+export const ISOLATED_FIRESTORE_PORT = 8087
 
 export const ISOLATED_CONFIG = Object.freeze({
   environment: 'emulator', projectId: ISOLATED_PROJECT,

@@ -172,5 +172,23 @@ test('Vite only exposes the isolated entry for an explicit development server, n
   assert.equal(normal.define.__TASKLY_ISOLATED_CLOUD__, 'false')
   assert.equal(build.define.__TASKLY_ISOLATED_CLOUD__, 'false')
   assert.equal(build.plugins.some((plugin) => plugin.name === 'taskly-isolated-entry'), false)
-  assert.match(development.server.headers['Content-Security-Policy'], /127\.0\.0\.1:8085/)
+  assert.match(development.server.headers['Content-Security-Policy'], /127\.0\.0\.1:8087/)
+})
+
+test('uncertain commands block new edits and refresh until an explicit identical retry is confirmed', async () => {
+  const f = fixture()
+  let retries = 0
+  const factory = f.options.createAccount
+  f.options.createAccount = async uid => ({ ...await factory(uid), hasPending: () => true,
+    retryPending: async () => { retries++; return { confirmed: true } } })
+  const c = createIsolatedController(f.options)
+  f.emit('a'); await tick()
+  await c.mutate(async () => { throw Object.assign(new Error('Unconfirmed'), { code: 'taskly/uncertain' }) })
+  assert.equal(c.getState().phase, 'uncertain')
+  assert.equal(await c.refresh(), false)
+  assert.equal(await c.mutate(async () => ({ confirmed: true })), false)
+  assert.equal(retries, 0)
+  assert.equal(await c.retryPending(), true)
+  assert.equal(retries, 1); assert.equal(c.getState().phase, 'saved')
+  c.dispose()
 })

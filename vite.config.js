@@ -20,8 +20,9 @@ export default defineConfig(({ mode, command }) => {
     ...(isolated ? {
       // Do not expose ordinary VITE_FIREBASE_* values from .env.local here.
       envPrefix: 'TASKLY_ISOLATED_',
-      server: { host: '127.0.0.1', port: 5174, strictPort: true, watch: { ignored: ['**/.firebase/**'] }, headers: {
-        'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:9099 http://127.0.0.1:8085 ws://127.0.0.1:5174;",
+      server: { host: '127.0.0.1', port: 5174, strictPort: true, watch: { ignored: ['**/.firebase/**'] },
+        proxy: { '/__trusted/mutate': { target: 'http://127.0.0.1:8787', changeOrigin: true, rewrite: () => '/mutate' } }, headers: {
+        'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:9100 http://127.0.0.1:8087 ws://127.0.0.1:5174;",
       } },
       plugins: [{ name: 'taskly-isolated-entry', enforce: 'pre',
         transformIndexHtml(html) { return html.replace('/src/main.js', '/src/isolated/main.js') },

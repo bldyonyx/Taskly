@@ -1,3 +1,9 @@
+Phase 4.7.3 update: the isolated UI now uses the trusted demo project on ports
+9100/8087 and a separate loopback command service. Browser initialization and
+account theme writes are blocked. Follow the current [trusted integration guide](trusted-mutations.md)
+for startup and validation; older isolated-port/legacy-writer instructions below
+are historical. Normal development and production safeguards are unchanged.
+
 # Phase 4.7.2: trusted lifecycle prototype
 
 The [trusted mutation architecture and full write-path audit](trusted-mutations.md)

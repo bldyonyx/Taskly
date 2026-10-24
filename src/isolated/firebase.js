@@ -6,6 +6,7 @@ import { createAuthSession } from '../js/auth/session.js'
 import { createFirestoreRepository } from '../js/firestore/repository.js'
 import { createFirestoreTransport } from '../js/firestore/firebase.js'
 import { createAccountData } from '../js/data/account.js'
+import { createTrustedAccount } from './trusted.js'
 import { assertIsolatedRuntime, assertEmulatorConfig, assertSyntheticEmail, ISOLATED_CONFIG } from './config.js'
 
 // No configuration or keys are read from .env, the default app, or production Auth.
@@ -32,7 +33,13 @@ export async function createIsolatedRuntime(guard, configuration = ISOLATED_CONF
     const check = () => {
       if (auth.currentUser?.uid !== uid) throw new Error('Test account session changed.')
     }
-    return createAccountData(createFirestoreRepository({ uid, session,
-      transport: createFirestoreTransport({ database: () => { check(); return db }, check }) }))
+    const transport = createFirestoreTransport({ database: () => { check(); return db }, check })
+    const readOnly = { ...transport, transact: (paths, plan) => transport.transact(paths, (values) => {
+      const changes = plan(values)
+      if (changes.length) throw new Error('Direct writes are disabled in trusted mode.')
+      return []
+    }) }
+    const reader = createAccountData(createFirestoreRepository({ uid, session, transport: readOnly }))
+    return createTrustedAccount({ reader, user: auth.currentUser, check })
   } }
 }

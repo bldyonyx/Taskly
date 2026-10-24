@@ -5,9 +5,9 @@ import path from 'node:path'
 import { createServer } from 'vite'
 
 // Run only with the dedicated demo emulators and a disposable browser profile.
-assert.equal(process.env.GCLOUD_PROJECT, 'demo-taskly-isolated')
-assert.equal(process.env.FIRESTORE_EMULATOR_HOST, '127.0.0.1:8085')
-assert.equal(process.env.FIREBASE_AUTH_EMULATOR_HOST, '127.0.0.1:9099')
+assert.equal(process.env.GCLOUD_PROJECT, 'demo-taskly-trusted')
+assert.equal(process.env.FIRESTORE_EMULATOR_HOST, '127.0.0.1:8087')
+assert.equal(process.env.FIREBASE_AUTH_EMULATOR_HOST, '127.0.0.1:9100')
 const root = path.resolve('.firebase', `cloud-ui-${Date.now()}`)
 await mkdir(root, { recursive: true })
 const browserCandidates = [process.env.TASKLY_TEST_BROWSER,
@@ -17,6 +17,13 @@ const browserCandidates = [process.env.TASKLY_TEST_BROWSER,
 let executable
 for (const candidate of browserCandidates) { try { await access(candidate); executable = candidate; break } catch {} }
 assert.ok(executable, 'Set TASKLY_TEST_BROWSER to an installed Chromium/Chrome/Edge executable.')
+const trusted = spawn(process.execPath, ['tools/trusted/server.mjs'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+await new Promise((resolve, reject) => { trusted.once('error', reject); trusted.stdout.once('data', resolve); trusted.once('exit', code => reject(new Error('Trusted startup failed: '+code))) })
+async function fixture(email) {
+  const child = spawn(process.execPath, ['tools/trusted/fixture.mjs', email], { windowsHide: true, stdio: 'pipe' })
+  let output = ''; child.stderr.on('data', chunk => output += chunk)
+  await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', code => code === 0 ? resolve() : reject(new Error(output))) })
+}
 const server = await createServer({ configFile: 'vite.config.js', mode: 'cloud-test' })
 await server.listen()
 const browser = spawn(executable, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${root}`,
@@ -26,6 +33,10 @@ const report = { passed: [], blockedRequests: [], errors: [], cancelledIntercept
 const cancelledInterception = (error) => error.code === -32602 && error.cdpMessage === 'Invalid InterceptionId.'
 const clients = []
 let holdFirestore = false
+let dropCommandResponse = false
+let failCommandRequest = false
+let holdCommand = false
+const commandRequests = []
 const heldRequests = []
 async function until(fn, message, timeout = 25000) {
   const start = Date.now()
@@ -78,7 +89,8 @@ try {
     await client.send('Runtime.enable')
     await client.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 1400, deviceScaleFactor: 1, mobile: false })
     client.on('Runtime.exceptionThrown', (event) => report.errors.push(event.exceptionDetails.exception?.description ?? event.exceptionDetails.text))
-    await client.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] })
+    await client.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' },
+      { urlPattern: '*/__trusted/mutate', requestStage: 'Response' }] })
     const intercept = (method, params) => {
       void client.send(method, params).catch((error) => {
         // Reload/logout can cancel a paused request before CDP releases it.
@@ -89,12 +101,29 @@ try {
     }
     client.on('Fetch.requestPaused', (event) => {
       const url = new URL(event.request.url)
+      if (url.pathname === '/__trusted/mutate') {
+        if (event.responseStatusCode) {
+          if (dropCommandResponse) {
+            dropCommandResponse = false
+            intercept('Fetch.failRequest', { requestId: event.requestId, errorReason: 'ConnectionClosed' }); return
+          }
+          intercept('Fetch.continueRequest', { requestId: event.requestId }); return
+        }
+        commandRequests.push(event.request.postData)
+        if (holdCommand) { heldRequests.push({ client, requestId: event.requestId }); return }
+        if (failCommandRequest) {
+          failCommandRequest = false
+          intercept('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 503,
+            responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+            body: Buffer.from(JSON.stringify({ ok: false, confirmed: false, code: 'unavailable' })).toString('base64') }); return
+        }
+      }
       const allowed = ['http:', 'ws:'].includes(url.protocol) && url.hostname === '127.0.0.1'
-        && ['5174', '8085', '9099'].includes(url.port)
+        && ['5174', '8087', '9100'].includes(url.port)
       if (!allowed && !['data:', 'blob:'].includes(url.protocol)) {
         report.blockedRequests.push(event.request.url)
         intercept('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' })
-      } else if (holdFirestore && url.port === '8085') {
+      } else if (holdFirestore && url.port === '8087') {
         heldRequests.push({ client, requestId: event.requestId })
       } else intercept('Fetch.continueRequest', { requestId: event.requestId })
     })
@@ -123,9 +152,9 @@ try {
     await settings(); await textClick('Create account')
     await fill('#account-email', email); await fill('#account-password', 'isolated-password-123'); await fill('#account-confirm-password', 'isolated-password-123')
     await submit('.account-form')
-    await until(async () => (await phase()) === 'uninitialized', 'new emulator account')
+    await until(async () => ['failed', 'uninitialized'].includes(await phase()), 'new emulator account')
     assert.deepEqual(await taskText(), [])
-    await click('[data-cloud-test] button:last-child'); await saved()
+    await fixture(email); await click('[data-cloud-test] button'); await ready()
   }
   async function logout() { await settings(); await textClick('Log out'); await ready(); assert.equal(await c.eval(`document.querySelector('[data-cloud-test]').dataset.kind`), 'guest') }
   async function login(email, waitForReady = true) {
@@ -150,7 +179,7 @@ try {
   assert.deepEqual(await taskText(), ['Guest sentinel']); pass('guest local context restored from disposable storage')
   const suffix = Date.now()
   const alice = `alice-${suffix}@example.test`; const bob = `bob-${suffix}@example.test`
-  await signup(alice); pass('test Auth signup, explicit initialization, empty account with no guest migration')
+  await signup(alice); pass('test Auth signup requires operator admission and fresh initialization; no guest migration')
   const aliceUid = await c.eval(`document.querySelector('[data-cloud-test]').dataset.uid`)
   await add('First account task'); await add('Second account task'); pass('create tasks through UI with server confirmation')
   await click('#task-list .edit-task'); await fill('.task-edit-input', 'Edited account task')
@@ -171,13 +200,16 @@ try {
   await until(async () => JSON.stringify(await taskText()) !== JSON.stringify(beforeDrag), 'task reorder')
   await saved(); pass('drag reorder through Sortable and revision-aware server commit')
   await click('#save-list'); await fill('#saved-list-name', 'Emulator list'); await submit('.taskly-dialog-form'); await saved(); pass('save Saved List and dated reference atomically')
+  await click('#save-list'); await fill('#saved-list-name', 'Trusted replacement'); await textClick('Update current'); await saved()
+  assert.equal(await c.eval(`document.querySelector('#current-list-label').textContent`), 'Trusted replacement')
+  pass('replace Saved List through trusted command while retaining dated reference')
   await click('#task-list .remove-task'); await until(async () => (await taskText()).length === 1, 'task deletion'); await saved(); pass('delete task through UI')
   await click('#saved-lists'); await textClick('Load list')
   await textClick('Replace current tasks'); await saved(); assert.equal((await taskText()).length, 2); pass('load Saved List through UI')
-  await settings(); await click('[data-theme-option="rose"]'); await saved()
-  assert.equal(await c.eval(`document.documentElement.dataset.theme`), 'rose'); pass('account theme saved without touching guest theme')
+  await settings(); assert.equal(await c.eval(`document.querySelector('[data-theme-option="rose"]').disabled`), true); await closeModal()
+  pass('account theme writes explicitly disabled')
   await c.send('Page.reload'); await ready()
-  assert.equal((await taskText()).length, 2); assert.equal(await c.eval(`document.documentElement.dataset.theme`), 'rose'); pass('browser refresh restores test Auth, tasks, and theme')
+  assert.equal((await taskText()).length, 2); pass('browser refresh restores emulator Auth and trusted tasks')
   await click('#finish-day'); await textClick('Finish day'); await saved()
   assert.equal(await c.eval(`document.querySelector('#new-task').disabled`), true)
   await click('#saved-lists'); await textClick('Finished days')
@@ -192,10 +224,6 @@ try {
   await instrument(other)
   await other.send('Page.navigate', { url: origin })
   await until(() => other.eval(`document.querySelector('[data-cloud-test]')?.dataset.phase==='ready'`), 'second tab account ready')
-  await other.eval(`document.querySelector('.settings-button').click()`)
-  await other.eval(`document.querySelector('[data-theme-option="ocean"]').click()`)
-  await until(() => other.eval(`document.querySelector('[data-cloud-test]')?.dataset.phase==='saved'`), 'other tab preference confirmed')
-  // Preference writes do not advance the manifest, so add a task on a separate active date.
   await other.eval(`document.querySelector('#date-card').click()`)
   await other.eval(`document.querySelector('.calendar-day.is-selected').nextElementSibling.click()`)
   await until(() => other.eval(`!document.querySelector('.taskly-modal')`), 'other tab calendar closed')
@@ -209,10 +237,10 @@ try {
   await c.send('Target.closeTarget', { targetId: created.targetId }); other.close()
   await c.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 })
   await fill('#new-task', 'Offline must not persist'); await submit('#task-form')
-  await until(async () => ['offline', 'failed'].includes(await phase()), 'offline save failure', 40000)
+  await until(async () => ['offline', 'failed', 'uncertain'].includes(await phase()), 'offline save failure', 40000)
   assert.equal((await taskText()).includes('Offline must not persist'), false)
   await c.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
-  await click('[data-cloud-test] button'); await ready()
+  await c.send('Page.reload'); await ready()
   assert.equal((await taskText()).includes('Offline must not persist'), false); pass('browser offline save fails without success or replay after reconnect')
   await logout(); assert.deepEqual(await taskText(), ['Guest sentinel']); pass('logout restores untouched guest data')
   await signup(bob); assert.deepEqual(await taskText(), []); await add('Bob only'); pass('second test account starts empty and stores isolated tasks')
@@ -245,8 +273,45 @@ try {
   await ready()
   assert.equal(await c.eval(`document.querySelector('[data-cloud-test]').dataset.uid`), aliceUid)
   assert.equal((await taskText()).includes('Bob only'), false)
-  assert.equal(await c.eval(`document.documentElement.dataset.theme`), 'ocean')
+  assert.equal(await c.eval(`document.documentElement.dataset.theme`), 'plum')
   pass('rapid UI account switching with delayed Firestore hydration suppresses stale account data and theme')
+  await click('#date-card')
+  await c.eval(`document.querySelector('.calendar-day.is-selected').nextElementSibling.click()`)
+  await closeModal()
+  // Lose an acknowledgment after an actual server commit, then replay exact bytes.
+  const revisionBeforeLoss = Number(await c.eval(`document.querySelector('[data-cloud-test]').dataset.revision`))
+  dropCommandResponse = true
+  await fill('#new-task', 'Lost acknowledgment'); await submit('#task-form')
+  await until(async () => await phase() === 'uncertain', 'lost acknowledgment shown as uncertain')
+  assert.equal(Number(await c.eval(`document.querySelector('[data-cloud-test]').dataset.revision`)), revisionBeforeLoss)
+  assert.equal((await taskText()).includes('Lost acknowledgment'), false)
+  await click('[data-cloud-test] button:last-child'); await saved()
+  assert.equal(commandRequests.at(-1), commandRequests.at(-2))
+  assert.equal(Number(await c.eval(`document.querySelector('[data-cloud-test]').dataset.revision`)), revisionBeforeLoss + 1)
+  assert.equal((await taskText()).filter(t => t === 'Lost acknowledgment').length, 1)
+  pass('lost committed acknowledgment retries identical bytes with one revision and no premature success')
+  failCommandRequest = true
+  await fill('#new-task', 'Service retry'); await submit('#task-form')
+  await until(async () => await phase() === 'uncertain', 'service failure stays unconfirmed')
+  assert.equal((await taskText()).includes('Service retry'), false)
+  await click('[data-cloud-test] button:last-child'); await saved()
+  assert.equal(commandRequests.at(-1), commandRequests.at(-2))
+  pass('failed service request has no visible partial change and exact retry succeeds')
+  holdCommand = true
+  await fill('#new-task', 'Canceled session task'); await submit('#task-form')
+  await until(() => heldRequests.length > 0, 'pending command held before transmission')
+  assert.equal(await phase(), 'saving')
+  await logout(); assert.deepEqual(await taskText(), ['Guest sentinel'])
+  holdCommand = false
+  for (const { client, requestId } of heldRequests.splice(0)) {
+    try { await client.send('Fetch.continueRequest', { requestId }) } catch (error) { if (!cancelledInterception(error)) throw error }
+  }
+  await login(alice)
+  await click('#date-card')
+  await c.eval(`document.querySelector('.calendar-day.is-selected').nextElementSibling.click()`)
+  await closeModal()
+  assert.equal((await taskText()).includes('Canceled session task'), false)
+  pass('logout aborts a pending command and suppresses previous-session results')
   const after = await c.eval(expr((keys) => keys.map((key) => [key, localStorage.getItem(key)]), guestKeys))
   assert.deepEqual(after, guestValues); pass('all seven guest keys remain byte-for-byte unchanged by account workflows')
   const png = await c.send('Page.captureScreenshot', { format: 'png' })
@@ -266,4 +331,5 @@ try {
   for (const client of clients) client.close()
   browser.kill()
   await server.close()
+  trusted.kill()
 }

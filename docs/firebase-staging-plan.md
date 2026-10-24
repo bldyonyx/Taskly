@@ -1,3 +1,100 @@
+# Phase 4.7.3: trusted UI integration (2026-10-21)
+
+**NO-GO for remote staging and production synchronization.** The isolated UI now
+uses the trusted demo project and deny-client-write candidate. This section
+supersedes launch instructions and current-status claims in historical sections.
+No remote Firebase access, project creation, deployment, migration, credential
+change, commit or push is part of this phase.
+
+The browser reads through a UID-bound repository whose transport rejects every
+nonempty write plan. Mutations use a same-origin Vite development proxy at
+`/__trusted/mutate` to numeric loopback `127.0.0.1:8787`. The separate Node
+service checks Host, optional exact Origin `http://127.0.0.1:5174`, method,
+JSON type, 256 KiB body, token, exact command grammar and transaction bounds.
+No CORS or cookie authentication is provided. Vite exposes this proxy only in
+cloud-test serve mode. Normal, cloud-test production and Pages builds exclude it.
+
+Auth/Firestore are fixed to `demo-taskly-trusted`, ports 9100/8087. The UID
+comes exclusively from emulator Auth verification with revocation and user
+existence/enabled checks. The transaction checks time-limited tester admission
+even on receipt replay. Admin bypasses rules; service validation is mandatory.
+Unsigned emulator tokens cannot prove cryptographic identity against local
+attackers. Remote use requires signed token verification, HTTPS/ingress policy,
+restricted signup, scoped IAM, quotas/rate limits, receipt retention, observability,
+clock policy and an inventory/adoption design. These remain blockers.
+
+Supported workflows: dated task create/edit/complete/delete/uncheck/clear/reorder;
+Saved List create, replace, load/append and delete; Finish Day, archive viewing,
+archive copy into an unfinished day and archive deletion; calendar navigation.
+Task IDs, completion flags, order, date keys and list references are retained.
+Server snapshots derive timestamps/counts and copy source tasks transactionally.
+Saved List replacement preserves its creation timestamp/order and rewrites
+membership/children atomically, without changing unrelated days or lists.
+
+Blocked: browser initialization/adoption, account theme writes, Finished Day
+editing/replacement, arbitrary archive creation, whole-account deletion, imports,
+migration and reconciliation. Account theme buttons are disabled; the service
+has no preference command. Existing guest behavior and all seven keys are intact.
+
+There are no Firestore listeners in this UI. Reads use a coherent manifest
+transaction; new writes capture the displayed revision. Stale revisions become a
+visible conflict requiring explicit reload, never a forced write with fresh tokens.
+An uncertain HTTP outcome blocks new edits and account reload; **Retry identical
+command** resends the same request ID/content/revision. Receipts prevent duplicate
+effects after lost acknowledgments. Browser page reload intentionally abandons
+in-memory intent and reads server state; inspect it before issuing new work.
+No durable/offline replay queue exists. Session epochs, UID-bound repository
+invalidation and AbortController suppress old-account results after logout or
+rapid switching. Cancellation cannot recall a command already accepted by the
+service; it may commit to the original UID and is never applied to the new UI.
+Success appears only after service commit confirmation and authoritative reload.
+
+The trusted candidate already denies **all** browser writes: manifest forgery,
+parent deletes, hidden children, fabricated counts, dangling references,
+preferences, imports, receipts and operator controls. Reads require owner plus
+active admission; roster/private controls/receipts cannot be read by clients.
+Canonical and legacy admission rules remain unchanged and are tested separately;
+their documented integrity gaps remain historical and are not used by this UI.
+
+## Local startup
+
+Use fresh disposable browser data and synthetic `@example.test` identities.
+Terminal A: `npm.cmd run emulators:trusted` (also `emulators:cloud-test`).
+Terminal B, from the project root:
+
+```powershell
+$env:GCLOUD_PROJECT = 'demo-taskly-trusted'
+$env:FIRESTORE_EMULATOR_HOST = '127.0.0.1:8087'
+$env:FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9100'
+npm.cmd run dev:trusted
+```
+
+Terminal C: `npm.cmd run dev:cloud-test`; open `http://127.0.0.1:5174`.
+Sign up with a synthetic account; it initially has no admission or trusted state.
+In a fourth terminal with the same three environment variables, run:
+
+```powershell
+npm.cmd run fixture:trusted -- alice@example.test
+```
+
+This explicit operator tool accepts only a newly created demo identity under five
+minutes old and refuses existing account families/markers/roster. It creates an
+empty revision-zero manifest, trusted marker and one-hour admission. It is solely
+a fresh test fixture, not an adoption/inventory tool; it cannot prove absence of
+operator-inserted orphans under missing parents. Never use it on existing data.
+Then click **Reload account data**. No browser command grants admission.
+`npm.cmd run test:cloud-ui` starts the dedicated emulators and runs the service,
+operator fixture and disposable browser automatically. `npm.cmd run test:trusted`
+runs Auth, rules, transport and transactional adversarial tests.
+
+Rollback: stop the dev server, service and emulators, then use normal
+`npm.cmd run dev`. Do not reopen direct aggregate writes on trusted-managed
+accounts. No deployed state or existing user data needs reversal.
+
+---
+
+## Historical results and design
+
 # Taskly Phase 4.7.2 — trusted mutation boundary (local only)
 
 ## Current decision — 2026-10-20
@@ -1039,3 +1136,66 @@ No production/staging Firestore or remote deployment was accessed. No real
 Firebase accounts or project were created, no synchronization was enabled, no
 user data was migrated/uploaded/deleted, and no commit or push was made. Local
 emulator data changes were limited to the synthetic demo rules suite.
+
+## Phase 4.7.3 final validation and changed files (2026-10-21)
+
+| Check | Result |
+| --- | --- |
+| Unit tests (npm test) | 89 passed, 0 failed, 0 skipped |
+| Canonical Firestore emulator | 33 passed, 0 failed, 2 admission-only skipped (35 discovered) |
+| Legacy admission Firestore emulator | 35 passed, 0 failed, 0 skipped |
+| Trusted Auth/Firestore/HTTP suite | 19 passed, 0 failed, 0 skipped |
+| Browser emulator workflows | 25 checks passed; zero runtime exceptions or non-loopback page requests |
+| Normal production / cloud-test production / GitHub Pages builds | All three succeeded; existing >500 kB chunk warning remains |
+| Production artifact isolation | 4 text artifacts per build; 12 passed total |
+| git diff --check | Passed; only line-ending notices |
+
+The trusted suite verifies missing/invalid/expired/wrong-project tokens, required
+temporal claims, revoked Auth sessions, disabled/deleted users, UID injection,
+missing/expired/malformed/disabled/revoked admission and reauthorization on receipt
+replay. It tests deny-all client writes, atomic oversized-operation rejection,
+Saved List replacement/cascade contention and competing task reorders. Two passing
+KNOWN LIMIT cases retain explicit unsigned-token impersonation and privileged
+missing-parent-orphan limitations; they are not remote security guarantees.
+
+Browser evidence: .firebase/cloud-ui-1792540247431/report.json and verified-ui.png
+(visually inspected). Browser checks include actual Sortable dragging, displayed
+revision conflicts, offline failure, lost acknowledgment after a real commit,
+exact-byte retry, injected service failure, pending-command logout, delayed
+hydration with rapid switching, and byte-identical preservation of all seven guest
+keys. The final token-time checks were added after that browser run and verified
+against real emulator identities in the final trusted suite. Logs are under
+.firebase/phase473-{unit,rules,admission,trusted,ui}.log.
+
+All requested validation categories were executed. The two canonical skips are
+executed by the admission suite. Remote/prod Auth, mobile/accessibility matrices,
+every list-editor dialog and privileged inventory/adoption were not exercised;
+remote access is deliberately out of scope. No observed supported-workflow
+regression remains. Account theme writes and browser initialization are explicit
+trusted-mode restrictions; normal guest/theme/backup/Auth behavior is unchanged.
+Normal production startup retains zero Firestore operations. Production and
+staging synchronization remain disabled. No remote Firebase data was accessed;
+no project was created, rules/service/Hosting deployed, existing user data changed,
+credentials or .env.local edited, commit made or push performed.
+
+Changed files (22):
+
+- tools/trusted/{server,service,commands,fixture}.mjs: loopback transport, token
+  temporal checks, explicit Saved List replacement, fresh operator fixture.
+- src/isolated/{config,firebase,controller,main,trusted}.js: trusted demo routing,
+  read-only SDK transport, authenticated commands, retries and session cancellation.
+- src/js/ui/modals.js: optional disabled theme buttons; default behavior preserved.
+- vite.config.js and package.json: development-only proxy/CSP and local scripts.
+- scripts/{cloud-ui,check-isolated-build}.mjs: trusted browser failure scenarios
+  and transport-marker exclusion checks.
+- tests/trusted-client.test.js, tests/isolated-controller.test.js and
+  tests/emulator/trusted.mjs: transport, retry, session, identity and race coverage.
+- docs/{trusted-mutations,firebase-staging-plan,isolated-cloud-testing,
+  cloud-lifecycle-safety,firebase-local-safety}.md: architecture, local startup,
+  limitations, rollback and current staging assessment.
+
+**Recommendation: GO for this isolated local experiment; NO-GO for remote staging
+or production synchronization.** Signed identity, restricted signup, scoped IAM,
+reviewed operator/adoption inventory, quotas, receipt lifecycle and complete
+production coverage remain prerequisites. Rollback never reopens direct writes
+on service-managed accounts.

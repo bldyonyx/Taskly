@@ -3,14 +3,14 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createTrustedService } from './service.mjs'
 
-// Tooling process only. No Vite entry, CORS, cookies or browser UI integration.
+// Tooling process only. Vite proxies same-origin requests; no CORS or cookies.
 export async function startTrustedServer() {
   const service = createTrustedService()
   const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json')
     res.setHeader('Cache-Control', 'no-store')
     const send = (status, body) => { res.writeHead(status); res.end(JSON.stringify(body)) }
-    if (req.headers.host !== '127.0.0.1:8787' || req.headers.origin || req.method !== 'POST'
+    if (req.headers.host !== '127.0.0.1:8787' || (req.headers.origin && req.headers.origin !== 'http://127.0.0.1:5174') || req.method !== 'POST'
       || req.url !== '/mutate' || req.headers['content-type'] !== 'application/json') {
       send(400, { ok: false, code: 'invalid-input', confirmed: false }); return
     }
@@ -40,6 +40,6 @@ export async function startTrustedServer() {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const server = await startTrustedServer()
-  console.log('Local trusted mutation prototype: http://127.0.0.1:8787/mutate (no account adoption or UI).')
+  console.log('Local trusted commands: http://127.0.0.1:8787/mutate (operator initialization required).')
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => { await server.close(); process.exit(0) })
 }

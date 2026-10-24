@@ -11,11 +11,12 @@
     "dev:trusted": "node tools/trusted/server.mjs",
     "dev": "vite",
     "dev:cloud-test": "vite --mode cloud-test",
-    "emulators:cloud-test": "firebase emulators:start --config firebase.isolated.json --only auth,firestore --project demo-taskly-isolated",
-    "test:cloud-ui": "firebase emulators:exec --config firebase.isolated.json --only auth,firestore --project demo-taskly-isolated \"node scripts/cloud-ui.mjs\"",
+    "emulators:cloud-test": "firebase emulators:start --config firebase.trusted.local.json --only auth,firestore --project demo-taskly-trusted",
+    "test:cloud-ui": "firebase emulators:exec --config firebase.trusted.local.json --only auth,firestore --project demo-taskly-trusted \"node scripts/cloud-ui.mjs\"",
     "build": "vite build",
     "deploy:firebase": "node scripts/firebase-deploy.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "fixture:trusted": "node tools/trusted/fixture.mjs"
   },
   "devDependencies": {
     "firebase-admin": "^14.5.0",

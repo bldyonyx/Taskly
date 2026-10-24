@@ -14,15 +14,16 @@ export function parseCommand(input) {
     && Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0, 'invalid-input', 'Invalid request ID or revision.')
   const schemas = { replaceDay: ['dateKey', 'tasks', 'currentListId'], saveList: ['dateKey', 'id', 'name'],
     finishDay: ['dateKey', 'id'], deleteParent: ['collection', 'id'] }
+  if (input.type === 'saveList' && input.payload?.replace === true) schemas.saveList = ['id', 'name', 'tasks', 'replace']
   const fields = typeof input.type === 'string' && Object.hasOwn(schemas, input.type) ? schemas[input.type] : null
   requireThat(fields && exact(input.payload, fields), 'invalid-input', 'Unsupported command or payload.')
   const p = input.payload
   requireThat(input.type === 'deleteParent' ? ['days', 'savedLists', 'finishedDays'].includes(p.collection)
-    && validId(p.id) && (p.collection !== 'days' || validDateKey(p.id)) : validDateKey(p.dateKey), 'invalid-input', 'Invalid parent.')
+    && validId(p.id) && (p.collection !== 'days' || validDateKey(p.id)) : p.replace === true || validDateKey(p.dateKey), 'invalid-input', 'Invalid parent.')
   if (['saveList', 'finishDay'].includes(input.type)) requireThat(validId(p.id), 'invalid-input', 'Invalid snapshot ID.')
   if (input.type === 'saveList') requireThat(typeof p.name === 'string' && p.name.length > 0 && p.name.length <= 200, 'invalid-input', 'Invalid list name.')
-  if (input.type === 'replaceDay') {
-    requireThat(p.currentListId === null || validId(p.currentListId), 'invalid-input', 'Invalid reference.')
+  if (input.type === 'replaceDay' || p.replace === true) {
+    if (input.type === 'replaceDay') requireThat(p.currentListId === null || validId(p.currentListId), 'invalid-input', 'Invalid reference.')
     requireThat(Array.isArray(p.tasks) && p.tasks.length <= 348 && new Set(p.tasks.map((t) => t?.id)).size === p.tasks.length
       && p.tasks.every((t) => exact(t, ['id', 'text', 'completed']) && validId(t.id)
         && typeof t.text === 'string' && t.text.length > 0 && t.text.length <= 10000 && typeof t.completed === 'boolean'), 'invalid-input', 'Invalid task snapshot.')
@@ -53,7 +54,13 @@ export function planCommand(uid, before, command, now) {
   const p = command.payload
   const dayPath = `days/${p.dateKey}`
   const day = state[dayPath]
-  if (command.type === 'replaceDay') {
+  if (command.type === 'saveList' && p.replace === true) {
+    const list = state[`savedLists/${p.id}`]
+    requireThat(list, 'not-found', 'Saved List no longer exists.')
+    list.metadata.name = p.name
+    list.metadata.updatedAt = now
+    list.tasks = p.tasks.map((t, order) => full({ ...t, order }))
+  } else if (command.type === 'replaceDay') {
     requireThat(p.currentListId === null || state[`savedLists/${p.currentListId}`], 'not-found', 'Referenced Saved List does not exist.')
     state[dayPath] = { metadata: full({ dateKey: p.dateKey, currentListId: p.currentListId }),
       tasks: p.tasks.map((t, order) => full({ ...t, order })) }

@@ -14,8 +14,9 @@ export function projectAccount(view) {
 }
 
 function errorState(error) {
+  if (error.code === 'taskly/uncertain') return ['uncertain', error.message]
   if (error.code === 'taskly/conflict') return ['conflict', 'Conflict detected. Reload account data before trying again.']
-  if (error.code === 'taskly/uninitialized') return ['uninitialized', 'This test account needs explicit empty-account initialization.']
+  if (error.code === 'taskly/uninitialized') return ['uninitialized', 'Operator initialization of a fresh synthetic account is required.']
   if (['unavailable', 'deadline-exceeded', 'auth/network-request-failed'].includes(error.code)
     || /offline|client is offline/i.test(error.message)) return ['offline', 'Offline or unavailable. Reconnect to the emulators, then reload account data.']
   if (/limit|exceeds|bounded/i.test(error.message)) return ['failed', 'Account or operation size limit reached. No partial operation will be attempted.']
@@ -83,10 +84,23 @@ export function createIsolatedController({ session, createAccount, readGuest, wr
     getState: () => state,
     subscribe(listener) { listeners.add(listener); listener(state); return () => listeners.delete(listener) },
     async refresh() {
-      if (!account || ['saving', 'loading'].includes(state.phase)) return false
+      if (!account || ['saving', 'loading', 'uncertain'].includes(state.phase)) return false
       const epoch = state.epoch
       publish({ phase: 'loading', message: 'Loading account data…' })
       try { return await load(epoch) } catch (error) { fail(error, epoch); return false }
+    },
+    async retryPending() {
+      if (!account?.hasPending?.() || state.phase !== 'uncertain') return false
+      const epoch = state.epoch
+      publish({ phase: 'saving', message: 'Retrying the identical trusted command…' })
+      let committed = false
+      try {
+        const result = await account.retryPending()
+        if (!current(epoch)) return false
+        if (result?.confirmed !== true) throw new Error('No server confirmation received.')
+        committed = true
+        return await load(epoch, 'Saved — confirmed by trusted service.')
+      } catch (error) { fail(error, epoch, committed); return false }
     },
     async initialize() {
       if (!account || state.phase !== 'uninitialized') return false

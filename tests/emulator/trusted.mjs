@@ -264,3 +264,69 @@ test('KNOWN LIMIT: unsigned Auth emulator tokens cannot prove cryptographic call
 test('final trusted-process network audit records zero non-loopback socket attempts', () => {
   assert.deepEqual(blockedConnections(), [])
 })
+
+test('Saved List replacement preserves server creation/order, references and task flags; stale replace/delete race has one winner', async () => {
+  const account = await user('replacement')
+  const send = c => service.execute(account.token, c)
+  assert.equal((await send(replace(0, [task('a'), task('b', true)]))).ok, true)
+  assert.equal((await send(cmd('saveList', { dateKey: '2026-10-20', id: 'list', name: 'Original' }, 1))).ok, true)
+  const original = (await root(account.uid, 'savedLists/list').get()).data()
+  const replacement = cmd('saveList', { id: 'list', name: 'Replacement', tasks: [task('b', true)], replace: true }, 2)
+  assert.equal((await send(replacement)).revision, 3)
+  assert.equal((await send(replacement)).replayed, true)
+  const updated = (await root(account.uid, 'savedLists/list').get()).data()
+  assert.equal(updated.createdAt, original.createdAt); assert.equal(updated.order, original.order)
+  assert.equal((await root(account.uid, 'savedLists/list/tasks/a').get()).exists, false)
+  assert.equal((await root(account.uid, 'savedLists/list/tasks/b').get()).data().completed, true)
+  assert.equal((await root(account.uid, 'days/2026-10-20').get()).data().currentListId, 'list')
+  const before = await snapshot(account.uid)
+  assert.equal((await send(cmd('saveList', { ...replacement.payload, createdAt: 'forged' }, 3))).code, 'invalid-input')
+  assert.deepEqual(await snapshot(account.uid), before)
+  const race = await Promise.all([send({ ...replacement, requestId: 'race-replace', expectedRevision: 3 }),
+    send(cmd('deleteParent', { collection: 'savedLists', id: 'list' }, 3))])
+  assert.equal(race.filter(r => r.ok).length, 1); assert.equal(race.filter(r => r.code === 'conflict').length, 1)
+})
+
+test('expired tokens, wrong audience/issuer and revoked Auth sessions are rejected', async () => {
+  const account = await user('token-validation')
+  const parts = account.token.split('.')
+  const claims = JSON.parse(Buffer.from(parts[1], 'base64url'))
+  for (const patch of [{ exp: 1 }, { exp: undefined }, { auth_time: undefined }, { iat: undefined },
+    { iat: Math.floor(Date.now() / 1000) + 3600 },
+    { aud: 'other-project' }, { iss: 'https://securetoken.google.com/other-project' }]) {
+    const forged = [...parts]; forged[1] = Buffer.from(JSON.stringify({ ...claims, ...patch })).toString('base64url')
+    assert.equal((await service.execute(forged.join('.'), replace(0))).code, 'unauthenticated')
+  }
+  await new Promise(resolve => setTimeout(resolve, 1100)) // Auth revocation timestamps have second precision.
+  await auth.revokeRefreshTokens(account.uid)
+  assert.equal((await service.execute(account.token, replace(0))).code, 'unauthenticated')
+})
+
+test('HTTP size and origin gates deny before any account mutation; approved proxy origin succeeds', async () => {
+  const account = await user('http-ui')
+  const post = (body, origin) => fetch('http://127.0.0.1:8787/mutate', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.token}`, Origin: origin }, body })
+  assert.equal((await post(JSON.stringify(replace(0)), 'http://localhost:5174')).status, 400)
+  assert.equal((await post('x'.repeat(262145), 'http://127.0.0.1:5174')).status, 413)
+  assert.equal((await root(account.uid, 'lifecycle/state').get()).data().revision, 0)
+  assert.equal((await post(JSON.stringify(replace(0)), 'http://127.0.0.1:5174')).status, 200)
+})
+
+test('independent trusted sessions racing task reorders preserve IDs and completion with one revision winner', async () => {
+  const account = await user('reorder-race')
+  const send = c => service.execute(account.token, c)
+  const tasks = [task('a', true), task('b'), task('c', true)]
+  assert.equal((await send(replace(0, tasks))).revision, 1)
+  const results = await Promise.all([send(replace(1, [tasks[2], tasks[0], tasks[1]])),
+    send(replace(1, [tasks[1], tasks[2], tasks[0]]))])
+  assert.equal(results.filter(r => r.ok).length, 1)
+  assert.equal(results.filter(r => r.code === 'conflict').length, 1)
+  const parent = (await root(account.uid, 'lifecycle/state').get()).data()
+  assert.equal(parent.revision, 2)
+  const ids = parent.parents['days/2026-10-20']
+  assert.deepEqual(ids, results[0].ok ? ['c', 'a', 'b'] : ['b', 'c', 'a'])
+  for (const [order, id] of ids.entries()) {
+    const data = (await root(account.uid, `days/2026-10-20/tasks/${id}`).get()).data()
+    assert.equal(data.order, order); assert.equal(data.completed, id !== 'b')
+  }
+})

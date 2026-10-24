@@ -1035,7 +1035,7 @@ function createAppearanceSection(appearance) {
   return section
 }
 
-function createThemeSection({ load = loadThemeId, select = selectTheme } = {}) {
+function createThemeSection({ load = loadThemeId, select = selectTheme, disabled = false } = {}) {
   const section = document.createElement('section')
   section.className = 'settings-theme-section'
   section.setAttribute('aria-labelledby', 'settings-theme-title')
@@ -1055,6 +1055,7 @@ function createThemeSection({ load = loadThemeId, select = selectTheme } = {}) {
     button.type = 'button'
     button.className = 'theme-option'
     button.dataset.themeOption = theme.id
+    button.disabled = disabled
     button.setAttribute('aria-pressed', String(theme.id === selectedThemeId))
     button.classList.toggle('is-selected', theme.id === selectedThemeId)
 

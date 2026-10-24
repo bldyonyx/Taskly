@@ -64,10 +64,10 @@ status.setAttribute('aria-live', 'polite')
 const refresh = document.createElement('button')
 refresh.type = 'button'; refresh.textContent = 'Reload account data'
 refresh.addEventListener('click', () => { closeAllModals(); void controller.refresh() })
-const initialize = document.createElement('button')
-initialize.type = 'button'; initialize.textContent = 'Initialize audited empty emulator account'
-initialize.addEventListener('click', () => { void controller.initialize() })
-banner.append(label, status, refresh, initialize)
+const retry = document.createElement('button')
+retry.type = 'button'; retry.textContent = 'Retry identical command'
+retry.addEventListener('click', () => { void controller.retryPending() })
+banner.append(label, status, refresh, retry)
 $('#app').prepend(banner)
 document.title = 'Taskly — ISOLATED EMULATOR TEST'
 let selectedDate = today
@@ -122,8 +122,8 @@ function render(view) {
   banner.dataset.revision = view.revision === null ? '' : String(view.revision)
   status.textContent = view.message
   refresh.hidden = view.kind !== 'account'
-  refresh.disabled = ['loading', 'saving'].includes(view.phase)
-  initialize.hidden = view.phase !== 'uninitialized'
+  refresh.disabled = ['loading', 'saving', 'uncertain'].includes(view.phase)
+  retry.hidden = view.phase !== 'uncertain'
   renderTasks(tasks(), elements, {
     canToggle: () => editable() && !dragging,
     onToggle: bind((id) => changeTasks(tasks().map((task) => task.id === id ? { ...task, completed: !task.completed } : task))),
@@ -232,6 +232,7 @@ $('#date-card').addEventListener('keydown', (event) => { if (['Enter', ' '].incl
 $('.settings-button').addEventListener('click', () => openSettingsPanel({ session: runtime.session,
   accountNote: 'ISOLATED TEST: accounts use local emulators; guest data stays on this browser.',
   localBackup: state().kind === 'guest', appearance: {
+    disabled: state().kind !== 'guest',
     load: () => state().theme,
     select: bind((theme) => state().kind === 'guest' ? controller.saveGuest(data(), [], theme) : run((account) => account.saveTheme(theme))),
   },
