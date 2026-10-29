@@ -12,7 +12,9 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if admittedOwner(uid);
       match /{family}/{id} {
-        allow read: if family in ['days', 'savedLists', 'finishedDays', 'lifecycle', 'preferences'] && admittedOwner(uid);
+        allow read: if (family in ['days', 'savedLists', 'finishedDays']
+          || (family == 'lifecycle' && id == 'state')
+          || (family == 'preferences' && id == 'general')) && admittedOwner(uid);
         match /tasks/{taskId} {
           allow read: if family in ['days', 'savedLists', 'finishedDays'] && admittedOwner(uid);
         }

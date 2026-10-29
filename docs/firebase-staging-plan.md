@@ -1,3 +1,12 @@
+# Phase 4.9 — Spark read-only preparation (2026-10-29)
+
+The [current Spark staging packet](firebase-spark-staging.md) supersedes the
+activation and billing recommendations below. Read-only staging remains dormant;
+remote mutations stay disabled. Local WSL validation is partly blocked by missing
+Java/Firestore emulators and Chromium. See the packet for exact results and gates.
+
+---
+
 # Phase 4.8: staging infrastructure prepared locally (2026-10-24)
 
 **GO for local preparation/review; NO-GO for remote staging or production.** This

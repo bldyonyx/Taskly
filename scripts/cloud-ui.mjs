@@ -24,7 +24,11 @@ async function fixture(email) {
   let output = ''; child.stderr.on('data', chunk => output += chunk)
   await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', code => code === 0 ? resolve() : reject(new Error(output))) })
 }
-const server = await createServer({ configFile: 'vite.config.js', mode: 'cloud-test' })
+const server = await createServer({ configFile: 'vite.config.js', mode: 'cloud-test',
+  // index.html names the normal entry; the isolated entry is substituted later.
+  // Scan the actual test graph up front to avoid optimizer-triggered reloads.
+  optimizeDeps: { entries: ['src/isolated/main.js'] },
+})
 await server.listen()
 const browser = spawn(executable, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${root}`,
   '--no-first-run', '--disable-background-networking', '--disable-component-update', '--disable-sync', 'about:blank'], { windowsHide: true, stdio: 'ignore' })
@@ -32,6 +36,8 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const report = { passed: [], blockedRequests: [], errors: [], cancelledInterceptionRequests: 0 }
 const cancelledInterception = (error) => error.code === -32602 && error.cdpMessage === 'Invalid InterceptionId.'
 const clients = []
+const browserDiagnostics = new Map()
+const failedRequests = []
 let holdFirestore = false
 let dropCommandResponse = false
 let failCommandRequest = false
@@ -82,14 +88,42 @@ try {
   const port = await until(async () => {
     try { return Number((await readFile(path.join(root, 'DevToolsActivePort'), 'utf8')).split('\n')[0]) } catch { return false }
   }, 'browser debug port')
-  const [target] = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
+  const targetsAtStartup = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
+  const target = targetsAtStartup.find(item => item.type === 'page' && item.url === 'about:blank')
+  assert.ok(target, 'Expected an about:blank page CDP target')
   c = await connect(target.webSocketDebuggerUrl)
+  browserDiagnostics.set(c, { targetId: target.id, targetType: target.type })
+  async function navigate(client, url) {
+    const expected = browserDiagnostics.get(client)
+    const { targetInfo } = await client.send('Target.getTargetInfo')
+    assert.equal(targetInfo.type, 'page', 'CDP connection must address a page target')
+    assert.equal(targetInfo.targetId, expected.targetId, 'CDP connection reached a different tab')
+    expected.intendedUrl = url
+    const navigation = await client.send('Page.navigate', { url })
+    expected.navigation = navigation
+    assert.ok(!navigation.errorText, `Navigation failed: ${navigation.errorText}`)
+    await until(async () => {
+      const { frameTree } = await client.send('Page.getFrameTree')
+      return frameTree.frame.id === navigation.frameId
+        && new URL(frameTree.frame.url).origin === url
+        && await client.eval(`window.location.origin === ${JSON.stringify(url)}`)
+    }, `navigation to intended page target ${expected.targetId}`)
+  }
   async function instrument(client) {
+    const requests = new Map()
+    client.on('Network.requestWillBeSent', event => requests.set(event.requestId, event.request.url))
+    client.on('Network.loadingFinished', event => requests.delete(event.requestId))
+    client.on('Network.loadingFailed', event => {
+      failedRequests.push({ targetId: browserDiagnostics.get(client)?.targetId,
+        url: requests.get(event.requestId), requestId: event.requestId,
+        errorText: event.errorText, blockedReason: event.blockedReason, canceled: event.canceled })
+      requests.delete(event.requestId)
+    })
+    client.on('Runtime.exceptionThrown', (event) => report.errors.push(event.exceptionDetails.exception?.description ?? event.exceptionDetails.text))
     await client.send('Network.enable')
     await client.send('Page.enable')
     await client.send('Runtime.enable')
     await client.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 1400, deviceScaleFactor: 1, mobile: false })
-    client.on('Runtime.exceptionThrown', (event) => report.errors.push(event.exceptionDetails.exception?.description ?? event.exceptionDetails.text))
     await client.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' },
       { urlPattern: '*/__trusted/mutate', requestStage: 'Response' }] })
     const intercept = (method, params) => {
@@ -146,6 +180,18 @@ try {
   const submit = (selector) => c.eval(expr((s) => document.querySelector(s).requestSubmit(), selector))
   const phase = () => c.eval(`document.querySelector('[data-cloud-test]')?.dataset.phase`)
   const ready = () => until(async () => ['ready', 'saved'].includes(await phase()), 'ready account/guest')
+  async function reloadReady() {
+    const { frameTree: before } = await c.send('Page.getFrameTree')
+    await c.send('Page.reload')
+    // Page.reload acknowledges the command before the old ready document leaves.
+    // Require a new document before accepting the application's ready marker.
+    await until(async () => {
+      const { frameTree } = await c.send('Page.getFrameTree')
+      return frameTree.frame.loaderId !== before.frame.loaderId
+        && await c.eval(`document.readyState === 'complete'
+          && ['ready', 'saved'].includes(document.querySelector('[data-cloud-test]')?.dataset.phase)`)
+    }, 'new document ready after reload')
+  }
   const saved = () => until(async () => (await phase()) === 'saved', 'server-confirmed saved state')
   const taskText = () => c.eval(`[...document.querySelectorAll('#task-list .task-text')].map(el=>el.textContent)`)
   const closeModal = async () => { if (await query('.taskly-modal')) { await click('[aria-label="Close dialog"]'); await until(async () => !await query('.taskly-modal'), 'modal closed') } }
@@ -166,7 +212,7 @@ try {
   }
   async function add(text) { await fill('#new-task', text); await submit('#task-form'); await saved() }
   const origin = 'http://127.0.0.1:5514'
-  await c.send('Page.navigate', { url: origin })
+  await navigate(c, origin)
   await ready()
   // Seed only disposable-profile guest data and preserve its exact raw strings.
   const guestKeys = ['taskly.tasks.v1', 'taskly.tasksByDate.v1', 'taskly.currentListByDate.v1',
@@ -177,7 +223,7 @@ try {
     localStorage.setItem('taskly.theme.v1', 'forest')
     return keys.map((key) => [key, localStorage.getItem(key)])
   }, guestKeys))
-  await c.send('Page.reload'); await ready()
+  await reloadReady()
   assert.deepEqual(await taskText(), ['Guest sentinel']); pass('guest local context restored from disposable storage')
   const suffix = Date.now()
   const alice = `alice-${suffix}@example.test`; const bob = `bob-${suffix}@example.test`
@@ -210,7 +256,7 @@ try {
   await textClick('Replace current tasks'); await saved(); assert.equal((await taskText()).length, 2); pass('load Saved List through UI')
   await settings(); assert.equal(await c.eval(`document.querySelector('[data-theme-option="rose"]').disabled`), true); await closeModal()
   pass('account theme writes explicitly disabled')
-  await c.send('Page.reload'); await ready()
+  await reloadReady()
   assert.equal((await taskText()).length, 2); pass('browser refresh restores emulator Auth and trusted tasks')
   await click('#finish-day'); await textClick('Finish day'); await saved()
   assert.equal(await c.eval(`document.querySelector('#new-task').disabled`), true)
@@ -240,9 +286,12 @@ try {
   // A second browser tab shares test Auth, but keeps an independent displayed revision.
   const created = await c.send('Target.createTarget', { url: 'about:blank' })
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
-  const other = await connect(targets.find((item) => item.id === created.targetId).webSocketDebuggerUrl)
+  const otherTarget = targets.find(item => item.id === created.targetId)
+  assert.equal(otherTarget?.type, 'page', 'Second CDP target must be a page')
+  const other = await connect(otherTarget.webSocketDebuggerUrl)
+  browserDiagnostics.set(other, { targetId: otherTarget.id, targetType: otherTarget.type })
   await instrument(other)
-  await other.send('Page.navigate', { url: origin })
+  await navigate(other, origin)
   await until(() => other.eval(`document.querySelector('[data-cloud-test]')?.dataset.phase==='ready'`), 'second tab account ready')
   await other.eval(`document.querySelector('#date-card').click()`)
   await other.eval(`document.querySelector('.calendar-day.is-selected').nextElementSibling.click()`)
@@ -260,7 +309,7 @@ try {
   await until(async () => ['offline', 'failed', 'uncertain'].includes(await phase()), 'offline save failure', 40000)
   assert.equal((await taskText()).includes('Offline must not persist'), false)
   await c.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
-  await c.send('Page.reload'); await ready()
+  await reloadReady()
   assert.equal((await taskText()).includes('Offline must not persist'), false); pass('browser offline save fails without success or replay after reconnect')
   await logout(); assert.deepEqual(await taskText(), ['Guest sentinel']); pass('logout restores untouched guest data')
   await signup(bob); assert.deepEqual(await taskText(), []); await add('Bob only'); pass('second test account starts empty and stores isolated tasks')
@@ -358,7 +407,7 @@ try {
   assert.deepEqual(after, guestValues); pass('all seven guest keys remain byte-for-byte unchanged by account workflows')
   await logout(); await settings(); await click('[data-theme-option="rose"]'); await closeModal()
   assert.equal(await c.eval(`document.documentElement.dataset.theme`), 'rose')
-  await c.send('Page.reload'); await ready()
+  await reloadReady()
   assert.equal(await c.eval(`document.documentElement.dataset.theme`), 'rose')
   await settings(); await click('[data-theme-option="forest"]'); await closeModal()
   assert.deepEqual(await c.eval(expr((keys) => keys.map(key => [key, localStorage.getItem(key)]), guestKeys)), guestValues)
@@ -374,9 +423,27 @@ try {
   pass('no production/non-loopback requests or browser runtime exceptions')
 } catch (error) {
   report.failure = error.stack
-  if (c) {
-    try { report.page = await c.eval('document.body.innerText'); report.phase = await c.eval(`document.querySelector('[data-cloud-test]')?.dataset.phase`) } catch {}
+  report.diagnostics = { viteResolvedUrls: server.resolvedUrls, failedRequests,
+    runtimeExceptions: [...report.errors], pages: [] }
+  // A dead/closed tab must not prevent the original failure report or cleanup.
+  for (const [client, target] of browserDiagnostics) {
+    let timer
+    try {
+      const page = await Promise.race([
+        client.eval(`({ url: location.href, readyState: document.readyState, title: document.title,
+          bodyExcerpt: (document.body?.innerText ?? '').slice(0, 1200),
+          cloudTestPresent: Boolean(document.querySelector('[data-cloud-test]')),
+          cloudTestDataset: document.querySelector('[data-cloud-test]')
+            ? { ...document.querySelector('[data-cloud-test]').dataset } : null })`),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Diagnostic evaluation timed out')), 2000) }),
+      ])
+      report.diagnostics.pages.push({ ...target, ...page })
+      if (client === c) { report.page = page.bodyExcerpt; report.phase = page.cloudTestDataset?.phase }
+    } catch (diagnosticError) {
+      report.diagnostics.pages.push({ ...target, diagnosticError: diagnosticError.message })
+    } finally { clearTimeout(timer) }
   }
+  process.stderr.write(`Browser failure diagnostics: ${JSON.stringify(report.diagnostics, null, 2)}\n`)
   throw error
 } finally {
   await writeFile(path.join(root, 'report.json'), JSON.stringify(report, null, 2))
